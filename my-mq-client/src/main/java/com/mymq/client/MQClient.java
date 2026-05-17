@@ -29,26 +29,26 @@ public class MQClient {
         group = new NioEventLoopGroup();
         Bootstrap b = new Bootstrap();
         b.group(group)
-         .channel(NioSocketChannel.class)
-         .handler(new ChannelInitializer<SocketChannel>() {
-             @Override
-             protected void initChannel(SocketChannel ch) {
-                 ch.pipeline()
-                   .addLast(new LengthFieldBasedFrameDecoder(1024*1024, 0, 4, 0, 4))
-                   .addLast(new LengthFieldPrepender(4))
-                   .addLast(new MessageCodec.Encoder())
-                   .addLast(new MessageCodec.Decoder())
-                   .addLast(new SimpleChannelInboundHandler<Message>() {
-                       @Override
-                       protected void channelRead0(ChannelHandlerContext ctx, Message msg) {
-                           CompletableFuture<Message> future = pendingRequests.remove(msg.getRequestId());
-                           if (future != null) {
-                               future.complete(msg);
-                           }
-                       }
-                   });
-             }
-         });
+                .channel(NioSocketChannel.class)
+                .handler(new ChannelInitializer<SocketChannel>() {
+                    @Override
+                    protected void initChannel(SocketChannel ch) {
+                        ch.pipeline()
+                                .addLast(new LengthFieldBasedFrameDecoder(1024 * 1024, 0, 4, 0, 4))
+                                .addLast(new LengthFieldPrepender(4))
+                                .addLast(new MessageCodec.Encoder())
+                                .addLast(new MessageCodec.Decoder())
+                                .addLast(new SimpleChannelInboundHandler<Message>() {
+                                    @Override
+                                    protected void channelRead0(ChannelHandlerContext ctx, Message msg) {
+                                        CompletableFuture<Message> future = pendingRequests.remove(msg.getRequestId());
+                                        if (future != null) {
+                                            future.complete(msg);
+                                        }
+                                    }
+                                });
+                    }
+                });
         ChannelFuture f = b.connect(host, port).sync();
         channel = f.channel();
         System.out.println("Connected to broker at " + host + ":" + port);
@@ -62,7 +62,12 @@ public class MQClient {
     }
 
     public void close() {
-        if (channel != null) channel.close();
-        if (group != null) group.shutdownGracefully();
+        if (channel != null) {
+            channel.flush();
+            channel.close();
+        }
+        if (group != null) {
+            group.shutdownGracefully();
+        }
     }
 }

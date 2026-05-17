@@ -9,9 +9,14 @@ public class Message {
     private String requestId;
     private String topic;
     private String body;
+    // 消费者组，用于区分不同消费组进度
+    private String group;
+    // 消费进度偏移量，PULL 时服务端返回，ACK 时客户端回传
+    private long pullOffset = -1;
     private Map<String, String> headers = new HashMap<>();
 
-    public Message() {}
+    public Message() {
+    }
 
     public Message(Command command, String topic, String body) {
         this.command = command.name();
@@ -58,5 +63,21 @@ public class Message {
 
     public void setHeaders(Map<String, String> headers) {
         this.headers = headers;
+    }
+
+    public long getPullOffset() {
+        return pullOffset;
+    }
+
+    public void setPullOffset(long pullOffset) {
+        this.pullOffset = pullOffset;
+    }
+
+    public String getGroup() {
+        return group;
+    }
+
+    public void setGroup(String group) {
+        this.group = group;
     }
 }

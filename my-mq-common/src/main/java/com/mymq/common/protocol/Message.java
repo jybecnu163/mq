@@ -14,6 +14,8 @@ public class Message {
     // 消费进度偏移量，PULL 时服务端返回，ACK 时客户端回传
     private long pullOffset = -1;
     private Map<String, String> headers = new HashMap<>();
+    // 延时消息专用字段（单位：毫秒）
+    private long delayMs = 0;
 
     public Message() {
     }
@@ -23,6 +25,13 @@ public class Message {
         this.topic = topic;
         this.body = body;
         this.requestId = UUID.randomUUID().toString();
+    }
+
+    // 新增构造方法，方便创建延时消息
+    public static Message createDelay(String topic, String body, long delayMs) {
+        Message msg = new Message(Command.SEND, topic, body);
+        msg.delayMs = delayMs;
+        return msg;
     }
 
     public Command getCommand() {
@@ -79,5 +88,13 @@ public class Message {
 
     public void setGroup(String group) {
         this.group = group;
+    }
+
+    public long getDelayMs() {
+        return delayMs;
+    }
+
+    public void setDelayMs(long delayMs) {
+        this.delayMs = delayMs;
     }
 }

@@ -3,8 +3,10 @@ package com.mymq.example;
 import com.mymq.client.Consumer;
 import com.mymq.client.MQClient;
 import com.mymq.client.Producer;
+import com.mymq.common.protocol.Command;
 import com.mymq.common.protocol.Message;
 
+import java.util.Random;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
@@ -16,10 +18,10 @@ public class ExampleClientMain {
         prodClient.connect();
         consClient1.connect();
         consClient2.connect();
-
+        String topic = "test-topic";
         Producer producer = new Producer(prodClient);
-        Consumer consumer1 = new Consumer(consClient1, "test-topic", "group-1");
-        Consumer consumer2 = new Consumer(consClient2, "test-topic", "group-2");
+        Consumer consumer1 = new Consumer(consClient1, topic, "group-1");
+        Consumer consumer2 = new Consumer(consClient2, topic, "group-2");
 
         // 1. 预注册两个消费者组（通过一次 PULL 触发服务端注册）
         consumer1.pull();
@@ -32,7 +34,13 @@ public class ExampleClientMain {
             int i = 0;
             while (true) {
                 try {
-                    producer.send("test-topic", System.currentTimeMillis() + " Hello QMQ!" + i++);
+                    producer.send(new Message(Command.SEND, topic, System.currentTimeMillis() + " Hello QMQ!" + i++));
+                    // 发送一条 10 秒后投递的延时消息
+                    Message delayMsg = Message.createDelay(topic,
+                            System.currentTimeMillis() + " This is a delayed message",
+                            1000 * new Random().nextInt(5, 30));
+                    producer.send(delayMsg); // 或直接 producer.sendDelay(...)
+
                     TimeUnit.MILLISECONDS.sleep(1500);
                 } catch (Exception e) {
                     System.err.println("Send error: " + e.getMessage());
@@ -44,7 +52,7 @@ public class ExampleClientMain {
         new Thread(() -> {
             try {
                 // 尝试拉取几次
-                for (int i = 0; i < 50; ) {
+                for (int i = 0; i < 5000; ) {
                     Message msg = consumer1.pull();
                     if (msg != null && msg.getBody() != null) {
                         i++;
@@ -62,10 +70,11 @@ public class ExampleClientMain {
                 throw new RuntimeException(e);
             }
         }).start();
+
         new Thread(() -> {
             try {
                 // 尝试拉取几次
-                for (int i = 0; i < 50; ) {
+                for (int i = 0; i < 50000; ) {
                     Message msg = consumer2.pull();
                     if (msg != null && msg.getBody() != null) {
                         i++;
@@ -84,7 +93,7 @@ public class ExampleClientMain {
             }
         }).start();
 
-        TimeUnit.SECONDS.sleep(3600);
+        TimeUnit.SECONDS.sleep(36000);
 
         prodClient.close();
         consClient1.close();

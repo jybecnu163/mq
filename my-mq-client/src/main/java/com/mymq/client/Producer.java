@@ -12,8 +12,7 @@ public class Producer {
         this.client = client;
     }
 
-    public void send(String topic, String body) throws ExecutionException, InterruptedException {
-        Message msg = new Message(Command.SEND, topic, body);
+    public void send(Message msg) throws ExecutionException, InterruptedException {
         Message response = client.send(msg).get();
         if (response.getCommand() == Command.RESPONSE && "OK".equals(response.getBody())) {
             System.out.println("Producer: message sent successfully");

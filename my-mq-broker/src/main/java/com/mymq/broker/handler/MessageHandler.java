@@ -29,7 +29,11 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
         Command cmd = msg.getCommand();
         switch (cmd) {
             case SEND:
-                handleSend(ctx, msg);
+                if (msg.getDelayMs() > 0) {
+                    handleDelaySend(ctx, msg);
+                } else {
+                    handleSend(ctx, msg);
+                }
                 break;
             case PULL:
                 handlePull(ctx, msg);
@@ -41,6 +45,28 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                 Message error = new Message(Command.RESPONSE, null, "Unknown command");
                 error.setRequestId(msg.getRequestId());
                 ctx.writeAndFlush(error);
+        }
+    }
+
+    private void handleDelaySend(ChannelHandlerContext ctx, Message msg) {
+        try {
+            String topic = msg.getTopic();
+            String body = msg.getBody();
+            long delayMs = msg.getDelayMs();
+            long expireTime = System.currentTimeMillis() + delayMs;
+
+            // 委托给 BrokerStore 的延时调度
+            store.scheduleDelayMessage(expireTime, topic, body);
+            System.out.println("Delay message scheduled: topic=" + topic + ", body=" + body + ", expireAt=" + expireTime);
+
+            Message ack = new Message(Command.RESPONSE, topic, "OK");
+            ack.setRequestId(msg.getRequestId());
+            ctx.writeAndFlush(ack);
+        } catch (Exception e) {
+            e.printStackTrace();
+            Message error = new Message(Command.RESPONSE, msg.getTopic(), "ERROR");
+            error.setRequestId(msg.getRequestId());
+            ctx.writeAndFlush(error);
         }
     }
 

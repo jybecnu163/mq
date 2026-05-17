@@ -13,11 +13,38 @@ public class BrokerStore {
     private final Map<String, ConsumeIndexManager> groupIndexes = new ConcurrentHashMap<>();
     private final String dataDir;
 
+    private final DelayMessageScheduler delayScheduler;
+
     public BrokerStore(String dataDir) throws Exception {
         this.dataDir = dataDir;
         this.messageLog = new MessageLog(dataDir);
+
+        // 初始化延时调度器，并定义到期后的处理：写入 messageLog 并追加索引
+        this.delayScheduler = new DelayMessageScheduler(dataDir, (topic, body) -> {
+            try {
+                long offset = messageLog.append(topic, body);
+                // 为所有已注册的消费者组追加索引
+                for (Map.Entry<String, ConsumeIndexManager> entry : groupIndexes.entrySet()) {
+                    if (entry.getKey().startsWith(topic + "-")) {
+                        entry.getValue().appendOffset(offset);
+                    }
+                }
+                System.out.println("Delay message expired and delivered: topic=" + topic + ", body=" + body);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        });
+        // 从磁盘恢复未到期的延时消息
+        delayScheduler.recover();
     }
 
+    /**
+     * 新增延时消息入口
+     */
+    public void scheduleDelayMessage(long expireTime, String topic, String body) throws Exception {
+        delayScheduler.schedule(expireTime, topic, body);
+    }
+    
     /**
      * 追加消息，返回物理偏移量
      */

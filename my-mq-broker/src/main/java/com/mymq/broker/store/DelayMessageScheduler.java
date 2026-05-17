@@ -5,7 +5,6 @@ import io.netty.util.HashedWheelTimer;
 import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
-import java.util.function.BiConsumer;
 
 /**
  * 两级时间轮调度器：
@@ -16,12 +15,17 @@ import java.util.function.BiConsumer;
 public class DelayMessageScheduler {
     private final DelayMessageStore diskStore;
     private final HashedWheelTimer timer;
-    // 回调：当消息到期时调用，参数为 (topic, body)
-    private final BiConsumer<String, String> onExpire;
 
-    public DelayMessageScheduler(String dataDir, BiConsumer<String, String> onExpire) {
+    // 回调：当消息到期时调用，参数为 (topic, body)
+    public interface DelayedMessageHandler {
+        void onExpire(String topic, String body, String tags);
+    }
+
+    private final DelayedMessageHandler handler;
+
+    public DelayMessageScheduler(String dataDir, DelayedMessageHandler handler) {
         this.diskStore = new DelayMessageStore(dataDir);
-        this.onExpire = onExpire;
+        this.handler = handler;
         // 创建内存时间轮，100ms 刻度，每轮 512 个槽
         this.timer = new HashedWheelTimer(100, TimeUnit.MILLISECONDS, 512);
         timer.start();
@@ -39,10 +43,10 @@ public class DelayMessageScheduler {
                 List<DelayMessageStore.DelayMessageEntry> entries = diskStore.loadHourFile(fileName);
                 for (DelayMessageStore.DelayMessageEntry entry : entries) {
                     if (entry.expireTime > now) {
-                        scheduleMemoryTask(entry.expireTime, entry.topic, entry.body);
+                        scheduleMemoryTask(entry.expireTime, entry.topic, entry.body, entry.tags);
                     } else {
                         // 已经过期（虽然文件名表示的小时未过去，但精确时间可能已过），立即投递
-                        onExpire.accept(entry.topic, entry.body);
+                        handler.onExpire(entry.topic, entry.body, entry.tags);
                     }
                 }
             }
@@ -52,20 +56,20 @@ public class DelayMessageScheduler {
     /**
      * 新增一条延时消息：先持久化到磁盘，再放入内存时间轮
      */
-    public void schedule(long expireTime, String topic, String body) throws IOException {
-        diskStore.store(expireTime, topic, body);
-        scheduleMemoryTask(expireTime, topic, body);
+    public void schedule(long expireTime, String topic, String body, String tags) throws IOException {
+        diskStore.store(expireTime, topic, body, tags);
+        scheduleMemoryTask(expireTime, topic, body, tags);
     }
 
-    private void scheduleMemoryTask(long expireTime, String topic, String body) {
+    private void scheduleMemoryTask(long expireTime, String topic, String body, String tags) {
         long delay = expireTime - System.currentTimeMillis();
         if (delay <= 0) {
             // 立即到期，直接投递
-            onExpire.accept(topic, body);
+            handler.onExpire(topic, body, tags);
             return;
         }
         timer.newTimeout(timeout -> {
-            onExpire.accept(topic, body);
+            handler.onExpire(topic, body, tags);
         }, delay, TimeUnit.MILLISECONDS);
     }
 

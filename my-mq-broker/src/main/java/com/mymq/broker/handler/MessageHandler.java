@@ -2,6 +2,7 @@ package com.mymq.broker.handler;
 
 import com.mymq.broker.store.BrokerStore;
 import com.mymq.broker.store.ConsumeIndexManager;
+import com.mymq.broker.store.MessageLog;
 import com.mymq.common.protocol.Command;
 import com.mymq.common.protocol.Message;
 import io.netty.channel.ChannelHandlerContext;
@@ -56,7 +57,7 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
             long expireTime = System.currentTimeMillis() + delayMs;
 
             // 委托给 BrokerStore 的延时调度
-            store.scheduleDelayMessage(expireTime, topic, body);
+            store.scheduleDelayMessage(expireTime, topic, body, msg.getTags());
             System.out.println("Delay message scheduled: topic=" + topic + ", body=" + body + ", expireAt=" + expireTime);
 
             Message ack = new Message(Command.RESPONSE, topic, "OK");
@@ -74,10 +75,11 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
         try {
             String topic = msg.getTopic();
             String body = msg.getBody();
-            long offset = store.appendMessage(topic, body);
+            String tags = msg.getTags();  // 获取 tags
+            long offset = store.appendMessage(topic, body, tags);
             System.out.println("Message stored: topic=" + topic + ", offset=" + offset + ", body=" + body);
 
-            // 遍历所有已注册组，自动追加索引
+            // 遍历所有已注册组，自动追加索引   // 追加索引到所有组（同前）
             for (Map.Entry<String, ConsumeIndexManager> entry : store.getAllGroupIndexes().entrySet()) {
                 if (entry.getKey().startsWith(topic + "-")) {
 //                    String group = entry.getKey().substring(topic.length() + 1);
@@ -152,46 +154,83 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
             String topic = msg.getTopic();
             String group = msg.getGroup() != null ? msg.getGroup() : "default";
 
+            String subscribeTag = msg.getSubscribeTag(); // 消费者订阅的 tag
+
             // 获取或创建消费者组索引（注册动作内置于 getOrCreateIndex）
             ConsumeIndexManager indexMgr = store.getOrCreateIndex(topic, group);
             System.out.println("Group active: topic=" + topic + ", group=" + group);
+            // 循环查找匹配的消息
+            while (true) {
+                long physicalOffset = indexMgr.peekNextOffset();
+                System.out.println("PULL debug: topic=" + topic + ", group=" + group +
+                        ", consumerOffset=" + indexMgr.getConsumerOffset() +
+                        ", physicalOffset=" + physicalOffset);
+                if (physicalOffset < 0) {
+                    // 无消息可消费，挂起长轮询  ... 挂起逻辑不变 ...
 
-            long physicalOffset = indexMgr.peekNextOffset();
-            System.out.println("PULL debug: topic=" + topic + ", group=" + group +
-                    ", consumerOffset=" + indexMgr.getConsumerOffset() +
-                    ", physicalOffset=" + physicalOffset);
+                    // 无消息，挂起等待，并设置超时
+                    PendingPull pending = new PendingPull(ctx, msg.getRequestId(), group, topic);
+                    // 将请求加入该 topic 的挂起列表
+                    List<PendingPull> list = pendingPulls.computeIfAbsent(topic, k -> new CopyOnWriteArrayList<>());
+                    list.add(pending);
+                    System.out.println("PULL suspended: topic=" + topic + ", group=" + group);
 
-            if (physicalOffset >= 0) {
-                // 有消息，立即返回
-                String body = store.readMessage(physicalOffset);
-                Message resp = new Message(Command.RESPONSE, topic, body);
-                resp.setRequestId(msg.getRequestId());
-                resp.setPullOffset(indexMgr.getConsumerOffset());
-                ctx.writeAndFlush(resp);
-            } else {
-                // 无消息，挂起等待，并设置超时
-                PendingPull pending = new PendingPull(ctx, msg.getRequestId(), group, topic);
-                // 将请求加入该 topic 的挂起列表
-                List<PendingPull> list = pendingPulls.computeIfAbsent(topic, k -> new CopyOnWriteArrayList<>());
-                list.add(pending);
-                System.out.println("PULL suspended: topic=" + topic + ", group=" + group);
+                    // 启动超时任务：5秒后自动返回空响应
+                    pending.timeoutFuture = scheduler.schedule(() -> {
+                        // 检查请求是否仍在列表中（可能已被唤醒移除）
+                        if (list.remove(pending)) {
+                            // 发送空响应
+                            Message emptyResp = new Message(Command.RESPONSE, topic, null);
+                            emptyResp.setRequestId(msg.getRequestId());
+                            emptyResp.setPullOffset(-1);
+                            ctx.writeAndFlush(emptyResp);
+                            System.out.println("PULL timeout: topic=" + topic + ", group=" + group);
+                        }
+                    }, 5000, TimeUnit.MILLISECONDS);
 
-                // 启动超时任务：5秒后自动返回空响应
-                pending.timeoutFuture = scheduler.schedule(() -> {
-                    // 检查请求是否仍在列表中（可能已被唤醒移除）
-                    if (list.remove(pending)) {
-                        // 发送空响应
-                        Message emptyResp = new Message(Command.RESPONSE, topic, null);
-                        emptyResp.setRequestId(msg.getRequestId());
-                        emptyResp.setPullOffset(-1);
-                        ctx.writeAndFlush(emptyResp);
-                        System.out.println("PULL timeout: topic=" + topic + ", group=" + group);
-                    }
-                }, 5000, TimeUnit.MILLISECONDS);
+                    return;
+                }
+
+                // 读取完整消息（含 tags）
+                MessageLog.MessageEntry entry = store.readMessageData(physicalOffset);
+                String messageTags = entry.tags;
+
+                // 检查 Tag 是否匹配
+                if (matchTag(messageTags, subscribeTag)) {
+                    // 匹配，返回给消费者
+                    Message resp = new Message(Command.RESPONSE, topic, entry.body);
+                    resp.setRequestId(msg.getRequestId());
+                    resp.setPullOffset(indexMgr.getConsumerOffset());
+                    ctx.writeAndFlush(resp);
+                    System.out.println("PULL matched: topic=" + topic + ", group=" + group + ", tags=" + messageTags);
+                    return;
+                } else {
+                    // 不匹配，自动跳过（ACK 推进偏移）
+                    indexMgr.commitOffset(indexMgr.getConsumerOffset());
+                    System.out.println("PULL skipped: topic=" + topic + ", group=" + group + ", tags=" + messageTags);
+                    // 继续循环，尝试下一条消息
+                }
             }
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    // Tag 匹配逻辑：支持 '*' 或 null 匹配所有，否则检查逗号分隔列表中是否包含订阅标签
+    private boolean matchTag(String messageTags, String subscribeTag) {
+        if (subscribeTag == null || subscribeTag.equals("*")) {
+            return true; // 不过滤
+        }
+        if (messageTags == null || messageTags.isEmpty()) {
+            return false; // 消息没有标签，但消费者指定了过滤条件，则不匹配
+        }
+        String[] tagsArray = messageTags.split(",");
+        for (String tag : tagsArray) {
+            if (tag.trim().equals(subscribeTag.trim())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void handleAck(ChannelHandlerContext ctx, Message msg) throws Exception {

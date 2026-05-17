@@ -17,6 +17,12 @@ public class Message {
     // 延时消息专用字段（单位：毫秒）
     private long delayMs = 0;
 
+    // 新增：消息标签（生产者设置）
+    private String tags;
+    // 新增：消费者订阅的标签（消费者拉取时使用）
+    private String subscribeTag;
+
+
     public Message() {
     }
 
@@ -96,5 +102,21 @@ public class Message {
 
     public void setDelayMs(long delayMs) {
         this.delayMs = delayMs;
+    }
+
+    public String getTags() {
+        return tags;
+    }
+
+    public void setTags(String tags) {
+        this.tags = tags;
+    }
+
+    public String getSubscribeTag() {
+        return subscribeTag;
+    }
+
+    public void setSubscribeTag(String subscribeTag) {
+        this.subscribeTag = subscribeTag;
     }
 }

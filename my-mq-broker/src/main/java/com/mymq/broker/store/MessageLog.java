@@ -29,8 +29,8 @@ public class MessageLog {
     /**
      * 追加消息，返回全局物理偏移量（写入前的位置）
      */
-    public synchronized long append(String topic, String body) throws Exception {
-        MessageEntry entry = new MessageEntry(topic, body);
+    public synchronized long append(String topic, String body, String tags) throws Exception {
+        MessageEntry entry = new MessageEntry(topic, body, tags);
         byte[] data = MAPPER.writeValueAsBytes(entry);
         int length = data.length;
 
@@ -49,22 +49,20 @@ public class MessageLog {
     /**
      * 根据物理偏移量读取消息 body（仅返回 body 内容）
      */
-    public String readMessage(long offset) throws Exception {
-        // 读取长度
+    // 修改 readMessage，返回完整的 MessageEntry 而非仅 body
+    public MessageEntry readMessage(long offset) throws Exception {
         ByteBuffer lenBuf = ByteBuffer.allocate(4);
         channel.read(lenBuf, offset);
         lenBuf.flip();
         int length = lenBuf.getInt();
 
-        // 读取数据
         ByteBuffer dataBuf = ByteBuffer.allocate(length);
         channel.read(dataBuf, offset + 4);
         dataBuf.flip();
         byte[] data = new byte[length];
         dataBuf.get(data);
 
-        MessageEntry entry = MAPPER.readValue(data, MessageEntry.class);
-        return entry.body;
+        return MAPPER.readValue(data, MessageEntry.class);
     }
 
     public void close() throws Exception {
@@ -72,16 +70,18 @@ public class MessageLog {
     }
 
     // 内部序列化结构，仅保存 topic 与 body（后续可扩展属性）
-    private static class MessageEntry {
+    public static class MessageEntry {
         public String topic;
         public String body;
+        public String tags;  // 新增
 
         public MessageEntry() {
         }
 
-        public MessageEntry(String topic, String body) {
+        public MessageEntry(String topic, String body, String tags) {
             this.topic = topic;
             this.body = body;
+            this.tags = tags;
         }
     }
 }

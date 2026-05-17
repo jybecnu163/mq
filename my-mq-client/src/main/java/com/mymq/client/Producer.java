@@ -20,4 +20,15 @@ public class Producer {
             System.out.println("Producer: send failed");
         }
     }
+
+    public void send(Message msg, String tags) throws ExecutionException, InterruptedException {
+//        Message msg = new Message(Command.SEND, topic, body);
+        msg.setTags(tags);
+        Message response = client.send(msg).get();
+        if (response.getCommand() == Command.RESPONSE && "OK".equals(response.getBody())) {
+            System.out.println("Producer: message sent successfully with tags=" + tags);
+        } else {
+            System.out.println("Producer: send failed");
+        }
+    }
 }

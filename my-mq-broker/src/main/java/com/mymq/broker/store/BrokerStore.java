@@ -20,9 +20,9 @@ public class BrokerStore {
         this.messageLog = new MessageLog(dataDir);
 
         // 初始化延时调度器，并定义到期后的处理：写入 messageLog 并追加索引
-        this.delayScheduler = new DelayMessageScheduler(dataDir, (topic, body) -> {
+        this.delayScheduler = new DelayMessageScheduler(dataDir, (topic, body, tags) -> {
             try {
-                long offset = messageLog.append(topic, body);
+                long offset = messageLog.append(topic, body, tags);
                 // 为所有已注册的消费者组追加索引
                 for (Map.Entry<String, ConsumeIndexManager> entry : groupIndexes.entrySet()) {
                     if (entry.getKey().startsWith(topic + "-")) {
@@ -41,21 +41,26 @@ public class BrokerStore {
     /**
      * 新增延时消息入口
      */
-    public void scheduleDelayMessage(long expireTime, String topic, String body) throws Exception {
-        delayScheduler.schedule(expireTime, topic, body);
+    public void scheduleDelayMessage(long expireTime, String topic, String body, String tags) throws Exception {
+        delayScheduler.schedule(expireTime, topic, body, tags);
     }
-    
+
     /**
      * 追加消息，返回物理偏移量
      */
-    public long appendMessage(String topic, String body) throws Exception {
-        return messageLog.append(topic, body);
+    public long appendMessage(String topic, String body, String tags) throws Exception {
+        return messageLog.append(topic, body, tags);
+    }
+
+    // 原有 readMessage 删除，或改为调用 readMessageData().getBody()
+    public String readMessage(long offset) throws Exception {
+        return readMessageData(offset).body;
     }
 
     /**
      * 根据物理偏移量读取消息体
      */
-    public String readMessage(long offset) throws Exception {
+    public MessageLog.MessageEntry readMessageData(long offset) throws Exception {
         return messageLog.readMessage(offset);
     }
 

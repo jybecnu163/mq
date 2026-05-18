@@ -108,14 +108,14 @@ public class MessageLog {
     /**
      * 追加消息，返回全局物理偏移量（写入前的位置）。
      */
-    public synchronized long append(String topic, String body, String tags) throws Exception {
+    public synchronized long append(String topic, String body, String tags, long timestamp) throws Exception {
         // 需要时创建或切换段
         if (activeSegment == null || activeSegment.size() >= maxSegmentSize) {
             rollNewSegment();
         }
 
         // 序列化消息
-        MessageEntry entry = new MessageEntry(topic, body, tags);
+        MessageEntry entry = new MessageEntry(topic, body, tags, timestamp);
         byte[] data = MAPPER.writeValueAsBytes(entry);
         int length = data.length;
 
@@ -125,8 +125,12 @@ public class MessageLog {
         buf.put(data);
         buf.flip();
 
-        long offset = activeSegment.append(buf);
-        return offset;
+        return activeSegment.append(buf);
+    }
+
+    // 兼容旧调用（无 tags）
+    public synchronized long append(String topic, String body, String tags) throws Exception {
+        return append(topic, body, tags, System.currentTimeMillis());
     }
 
     /**
@@ -153,6 +157,17 @@ public class MessageLog {
             }
         }
     }
+
+    /**
+     * 获取指定物理偏移量对应消息的时间戳
+     */
+    public long getMessageTimestamp(long offset) throws Exception {
+        Segment seg = findSegment(offset);
+        if (seg == null) return 0;
+        MessageEntry entry = seg.readMessage(offset - seg.getBaseOffset());
+        return entry.timestamp;
+    }
+
     // -------- 私有辅助方法 --------
 
     /**
@@ -174,6 +189,7 @@ public class MessageLog {
 
     /**
      * 新增：根据消费进度和时间清理旧段
+     * // 删除旧段时增加时间条件：段的最后一条消息时间戳早于指定时间
      *
      * @param minConsumedOffset
      * @param maxAgeMillis
@@ -182,39 +198,39 @@ public class MessageLog {
     public synchronized int deleteOldSegments(long minConsumedOffset, long maxAgeMillis) {
         long now = System.currentTimeMillis();
         int deleted = 0;
-        // 使用迭代器安全删除
         Iterator<Segment> it = segments.iterator();
         while (it.hasNext()) {
             Segment seg = it.next();
-            // 活动段不能删除
-            if (seg == activeSegment) {
-                continue;
-            }
-            // 条件1：该段的所有消息都已被消费（段的结束偏移量 <= 最小消费偏移量）
-            // 条件2：该段最后一次写入（或关闭时间）距今超过 maxAgeMillis
-            if (seg.getEndOffset() <= minConsumedOffset &&
-                    (now - seg.lastModified) >= maxAgeMillis) {
+            if (seg == activeSegment) continue;
 
-                // 确保通道已关闭（通常在 roll 时已关，但保险起见）
-                if (seg.channel != null && seg.channel.isOpen()) {
-                    try {
-                        seg.close();
-                    } catch (Exception e) {
-                        log.error("close error", e);
-                    }
+            // 条件1：所有消息已被消费
+            if (seg.getEndOffset() > minConsumedOffset) break;
+
+            // 条件2：段内最后一条消息的时间戳早于 (当前时间 - maxAgeMillis)
+            try {
+                long lastTimestamp = seg.getLastTimestamp();
+                if (lastTimestamp > 0 && (now - lastTimestamp) < maxAgeMillis) {
+                    break; // 后续段可能更晚，不能删除
                 }
-                // 删除物理文件
-                if (seg.file.exists()) {
-                    boolean ok = seg.file.delete();
-                    if (ok) {
-                        log.info("Deleted old segment: {}", seg.file.getName());
-                    } else {
-                        log.warn("Failed to delete segment: {}", seg.file.getName());
-                    }
-                }
-                it.remove();
-                deleted++;
+            } catch (Exception e) {
+                log.warn("Failed to read last timestamp of segment {}", seg.getFile().getName(), e);
             }
+
+            // 安全删除
+            if (seg.channel != null && seg.channel.isOpen()) {
+                try {
+                    seg.close();
+                } catch (Exception e) {
+                    log.error("close error", e);
+                }
+            }
+            if (seg.file.exists()) {
+                boolean ok = seg.file.delete();
+                if (ok) log.info("Deleted old segment: {}", seg.file.getName());
+                else log.warn("Failed to delete: {}", seg.file.getName());
+            }
+            it.remove();
+            deleted++;
         }
         return deleted;
     }
@@ -246,7 +262,7 @@ public class MessageLog {
         private FileChannel channel;   // 读写通道（读写模式）
         private long wrotePosition;          // 当前已写入字节数（仅活动段有意义）
         private volatile long lastModified;  // 段关闭时的系统时间，未关闭时可能为0
-
+        private long lastTimestamp;  // 段内最后一条消息的时间戳（缓存）
 
         Segment(File file, long baseOffset) throws IOException {
             this.file = file;
@@ -260,6 +276,17 @@ public class MessageLog {
             channel.position(wrotePosition);
             // 初始为文件系统时间
             this.lastModified = file.lastModified();
+
+            // 尝试读取段内最后一条消息的时间戳，缓存起来
+            try {
+                if (wrotePosition > 0) {
+                    MessageEntry lastEntry = readMessage(wrotePosition -
+                            (4 + getLastEntrySize()));
+                    this.lastTimestamp = lastEntry.timestamp;
+                }
+            } catch (Exception e) {
+                this.lastTimestamp = 0; // 兼容旧格式
+            }
         }
 
         long getBaseOffset() {
@@ -302,6 +329,14 @@ public class MessageLog {
             this.channel = channel;
         }
 
+        public long getLastTimestamp() {
+            return lastTimestamp;
+        }
+
+        public void setLastTimestamp(long lastTimestamp) {
+            this.lastTimestamp = lastTimestamp;
+        }
+
         /**
          * 追加数据并返回全局偏移量。
          */
@@ -312,7 +347,21 @@ public class MessageLog {
 
             // 更新最后修改时间（也可依赖操作系统，这里显式设置）
             this.lastModified = System.currentTimeMillis();
+            try {
+                // 更新缓存的时间戳（需要解析本次写入的消息）
+                // 简单方式：每次追加后，解析最后一条消息获取时间戳
+                MessageEntry entry = readMessage(wrotePosition - (4 + buf.limit() - 4));
+                this.lastTimestamp = entry.timestamp;
+            } catch (Exception e) { /* ignore */ }
             return offset;
+        }
+
+        // 帮助方法：获取最后一条消息的数据长度（用于定位）
+        private int getLastEntrySize() throws IOException {
+            ByteBuffer lenBuf = ByteBuffer.allocate(4);
+            channel.read(lenBuf, wrotePosition - 4);
+            lenBuf.flip();
+            return lenBuf.getInt();
         }
 
         /**
@@ -343,21 +392,63 @@ public class MessageLog {
                 this.lastModified = System.currentTimeMillis();
             }
         }
+
+
     }
 
     // -------- 内部消息条目（保持不变） --------
     // 内部序列化结构，仅保存 topic 与 body（后续可扩展属性）
     public static class MessageEntry {
-        public String topic;
-        public String body;
-        public String tags;  // 新增
+        private String topic;
+        private String body;
+        private String tags;  // 新增
+        private long timestamp;
 
         public MessageEntry() {
+            // 无参构造器
         }
 
-        public MessageEntry(String topic, String body, String tags) {
+        public MessageEntry(long timestamp) {
+            this.timestamp = timestamp;
+        }
+
+        public MessageEntry(String topic, String body, String tags, long timestamp) {
             this.topic = topic;
             this.body = body;
+            this.tags = tags;
+            this.timestamp = timestamp;
+        }
+
+        public long getTimestamp() {
+            return timestamp;
+        }
+
+        public void setTimestamp(long timestamp) {
+            this.timestamp = timestamp;
+        }
+
+
+        public String getTopic() {
+            return topic;
+        }
+
+        public void setTopic(String topic) {
+            this.topic = topic;
+        }
+
+        public String getBody() {
+            return body;
+        }
+
+        public void setBody(String body) {
+            this.body = body;
+        }
+
+        public String getTags() {
+            return tags;
+        }
+
+        public void setTags(String tags) {
             this.tags = tags;
         }
     }

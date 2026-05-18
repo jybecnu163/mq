@@ -39,11 +39,12 @@ public class BrokerStore {
         // 初始化延时调度器，并定义到期后的处理：写入 messageLog 并追加索引
         this.delayScheduler = new DelayMessageScheduler(dataDir, (topic, body, tags) -> {
             try {
+                long now = System.currentTimeMillis();
                 long offset = messageLog.append(topic, body, tags);
                 // 为所有已注册的消费者组追加索引
                 for (Map.Entry<String, ConsumeIndexManager> entry : groupIndexes.entrySet()) {
                     if (entry.getKey().startsWith(topic + "-")) {
-                        entry.getValue().appendOffset(offset);
+                        entry.getValue().appendOffset(offset, now);
                     }
                 }
                 log.info("Delay message expired and delivered: topic={}, body={}", topic, body);
@@ -91,14 +92,21 @@ public class BrokerStore {
      * 追加消息，返回物理偏移量
      */
     public long appendMessage(String topic, String body, String tags) throws Exception {
-        long offset = messageLog.append(topic, body, tags);
+        long now = System.currentTimeMillis();
+        long offset = messageLog.append(topic, body, tags, now);
+        // 为所有已注册组追加索引（带时间戳）
+        for (Map.Entry<String, ConsumeIndexManager> entry : groupIndexes.entrySet()) {
+            if (entry.getKey().startsWith(topic + "-")) {
+                entry.getValue().appendOffset(offset, now);
+            }
+        }
         messagesProduced.increment();   // 生产计数+1
         return offset;
     }
 
     // 原有 readMessage 删除，或改为调用 readMessageData().getBody()
     public String readMessage(long offset) throws Exception {
-        return readMessageData(offset).body;
+        return readMessageData(offset).getBody();
     }
 
     /**
@@ -137,10 +145,9 @@ public class BrokerStore {
         activeConnections.decrementAndGet();
     }
 
-    // 定时清理入口（由 BrokerServer 的调度器调用）
+    // 定时清理（可在 BrokerServer 调度）
     public int cleanupOldSegments(long maxAgeMillis) {
-        long minOffset = getMinConsumerOffset();
-        return messageLog.deleteOldSegments(minOffset, maxAgeMillis);
+        return messageLog.deleteOldSegments(getMinConsumerOffset(), maxAgeMillis);
     }
 
     public long getMinConsumerOffset() {

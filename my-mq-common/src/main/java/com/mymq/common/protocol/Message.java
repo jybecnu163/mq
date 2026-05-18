@@ -21,7 +21,7 @@ public class Message {
     private String tags;
     // 新增：消费者订阅的标签（消费者拉取时使用）
     private String subscribeTag;
-
+    private long startTime = 0;   // 起始消费时间（毫秒时间戳），0 表示从最早开始
 
     public Message() {
     }
@@ -118,5 +118,13 @@ public class Message {
 
     public void setSubscribeTag(String subscribeTag) {
         this.subscribeTag = subscribeTag;
+    }
+
+    public long getStartTime() {
+        return startTime;
+    }
+
+    public void setStartTime(long startTime) {
+        this.startTime = startTime;
     }
 }

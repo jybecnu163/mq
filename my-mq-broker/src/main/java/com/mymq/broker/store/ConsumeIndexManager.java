@@ -4,6 +4,10 @@ import java.io.File;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
 
 /**
  * 消费者索引与进度管理，类似 QMQ 的 pull log 简化版
@@ -14,6 +18,9 @@ public class ConsumeIndexManager {
     private final FileChannel progressChannel; // 存储当前消费进度（下一个要消费的索引位置）
     private long consumerOffset;               // 下一个待消费的索引序号
     private long indexCount;                   // 索引文件已有的记录数
+    // 新增：时间索引（内存），用于按时间查找
+    private final List<TimeOffsetEntry> timeIndex = new ArrayList<>();
+
 
     public ConsumeIndexManager(String dataDir, String topic, String group) throws Exception {
         String prefix = dataDir + "/" + topic + "-" + group;
@@ -41,12 +48,35 @@ public class ConsumeIndexManager {
     /**
      * 追加一条物理偏移量到索引文件
      */
-    public synchronized void appendOffset(long physicalOffset) throws Exception {
+    public synchronized void appendOffset(long physicalOffset, long timestamp) throws Exception {
         ByteBuffer buf = ByteBuffer.allocate(8);
         buf.putLong(physicalOffset);
         buf.flip();
         indexChannel.write(buf, indexCount * 8);
+        // 时间索引记录
+        timeIndex.add(new TimeOffsetEntry(timestamp, physicalOffset, indexCount));
         indexCount++;
+    }
+
+    /**
+     * 根据起始时间查找对应的消费偏移量
+     *
+     * @param startTime 起始时间戳（毫秒）
+     * @return 第一个时间戳 >= startTime 的消费偏移量，若没有则返回 -1
+     */
+    public synchronized long findStartOffset(long startTime) {
+        if (startTime <= 0 || timeIndex.isEmpty()) {
+            return consumerOffset; // 默认从当前进度开始
+        }
+        int idx = Collections.binarySearch(timeIndex, new TimeOffsetEntry(startTime, 0, 0),
+                Comparator.comparingLong(e -> e.timestamp));
+        if (idx < 0) {
+            idx = -idx - 1; // 插入点
+        }
+        if (idx >= timeIndex.size()) {
+            return -1; // 没有匹配的消息
+        }
+        return timeIndex.get(idx).consumerOffset;
     }
 
     /**
@@ -95,5 +125,27 @@ public class ConsumeIndexManager {
     public void close() throws Exception {
         indexChannel.close();
         progressChannel.close();
+    }
+
+    public synchronized void resetConsumerOffset(long newOffset) throws Exception {
+        this.consumerOffset = newOffset;
+        // 持久化新进度
+        ByteBuffer buf = ByteBuffer.allocate(8);
+        buf.putLong(consumerOffset);
+        buf.flip();
+        progressChannel.write(buf, 0);
+    }
+    
+    // === 内部辅助类 ===
+    private static class TimeOffsetEntry {
+        final long timestamp;
+        final long physicalOffset;
+        final long consumerOffset;  // 该消息对应的消费偏移量
+
+        TimeOffsetEntry(long timestamp, long physicalOffset, long consumerOffset) {
+            this.timestamp = timestamp;
+            this.physicalOffset = physicalOffset;
+            this.consumerOffset = consumerOffset;
+        }
     }
 }

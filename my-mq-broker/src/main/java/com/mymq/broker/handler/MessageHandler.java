@@ -88,7 +88,7 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
             for (Map.Entry<String, ConsumeIndexManager> entry : store.getAllGroupIndexes().entrySet()) {
                 if (entry.getKey().startsWith(topic + "-")) {
 //                    String group = entry.getKey().substring(topic.length() + 1);
-                    entry.getValue().appendOffset(offset);
+                    entry.getValue().appendOffset(offset, System.currentTimeMillis());
 //                    System.out.println("Index appended: topic=" + topic + ", group=" + group + ", offset=" + offset);
                 }
             }
@@ -164,6 +164,14 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
 
             // 获取或创建消费者组索引（注册动作内置于 getOrCreateIndex）
             ConsumeIndexManager indexMgr = store.getOrCreateIndex(topic, group);
+            long startTime = msg.getStartTime();
+            if (startTime > 0 && indexMgr.getConsumerOffset() == 0) {
+                long startOffset = indexMgr.findStartOffset(startTime);
+                if (startOffset >= 0) {
+                    indexMgr.resetConsumerOffset(startOffset); // 新增方法，直接设置进度
+                    log.info("Consumer {} set start offset to {} based on time {}", group, startOffset, startTime);
+                }
+            }
 
             log.info("Group active: topic={}, group={}", topic, group);
             // 循环查找匹配的消息
@@ -195,12 +203,12 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
 
                 // 读取完整消息（含 tags）
                 MessageLog.MessageEntry entry = store.readMessageData(physicalOffset);
-                String messageTags = entry.tags;
+                String messageTags = entry.getTags();
 
                 // 检查 Tag 是否匹配
                 if (matchTag(messageTags, subscribeTag)) {
                     // 匹配，返回给消费者
-                    Message resp = new Message(Command.RESPONSE, topic, entry.body);
+                    Message resp = new Message(Command.RESPONSE, topic, entry.getBody());
                     resp.setRequestId(msg.getRequestId());
                     resp.setPullOffset(indexMgr.getConsumerOffset());
                     ctx.writeAndFlush(resp);

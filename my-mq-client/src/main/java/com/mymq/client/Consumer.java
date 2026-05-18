@@ -11,6 +11,7 @@ public class Consumer {
     private final String group;
     private long lastPullOffset = -1;   // 记录最后拉取消息的偏移，用于 ACK
     private String subscribeTag;  // 新增订阅标签
+    private long startTime = 0;   // 毫秒时间戳，0 表示从最早开始
 
     public Consumer(MQClient client, String topic, String group) {
         this(client, topic, group, null); // 默认不过滤
@@ -30,6 +31,8 @@ public class Consumer {
         Message request = new Message(Command.PULL, topic, "");
         request.setGroup(group);                // 设置消费者组
         request.setSubscribeTag(subscribeTag);  // 设置订阅标签
+        request.setStartTime(startTime);
+        
         Message response = client.send(request).get();
 
         if (response.getBody() == null) {
@@ -66,5 +69,13 @@ public class Consumer {
 
     public void setSubscribeTag(String subscribeTag) {
         this.subscribeTag = subscribeTag;
+    }
+
+    public long getStartTime() {
+        return startTime;
+    }
+
+    public void setStartTime(long startTime) {
+        this.startTime = startTime;
     }
 }

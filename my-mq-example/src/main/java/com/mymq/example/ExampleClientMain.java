@@ -29,12 +29,16 @@ public class ExampleClientMain {
         // 1. 预注册两个消费者组（通过一次 PULL 触发服务端注册）
         consumer1.pull();
         consumer2.pull();
+        // 创建消费者后，设置从 1 分钟前开始消费
+        consumer1.setStartTime(System.currentTimeMillis()
+                - TimeUnit.MINUTES.toMillis(1));
+
         Random rand = new Random();
         String[] tagsArr = new String[]{"paid", "order", "paid,order"};
 //        让出 CPU 保证注册请求到达服务端
         Thread.sleep(200);
         // 2. 启动 Producer 线程
-        for (int n = 0; n < 10; n++) {
+        for (int n = 0; n < 1; n++) {
             // 单线程生产10W，大概10.5s，
             // 10线程分别生产10W，大概30s，sdf.format 和 rand 可能时单线程
 
@@ -44,7 +48,7 @@ public class ExampleClientMain {
                 String[] tags = new String[]{"paid", "order", "paid,order"};
                 int i = 0;
                 long start = System.currentTimeMillis();
-                while (true && i < 100000) {
+                while (true && i < 1000) {
                     try {
 //                    producer.send(new Message(Command.SEND, topic,
 //                                    sdf.format(System.currentTimeMillis()) + " Hello QMQ!" + i++),
@@ -60,7 +64,7 @@ public class ExampleClientMain {
 //                    delayMsg.setTags(tagsArr[rand.nextInt(tagsArr.length)]);
 //                    producer.send(delayMsg); // 或直接 producer.sendDelay(...)
 
-//                    TimeUnit.MILLISECONDS.sleep(1500);
+                        TimeUnit.MILLISECONDS.sleep(1500);
                     } catch (Exception e) {
                         System.err.println("Send error: " + e.getMessage());
                     }

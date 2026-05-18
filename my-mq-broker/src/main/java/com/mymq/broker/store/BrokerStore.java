@@ -8,6 +8,9 @@ import org.slf4j.LoggerFactory;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -16,7 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class BrokerStore {
     private static final Logger log = LoggerFactory.getLogger(BrokerStore.class);
-
+    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
     private final MessageLog messageLog;
     // 所有消费者组索引管理器，key = "topic-group"
@@ -61,6 +64,20 @@ public class BrokerStore {
         Gauge.builder("mq_active_connections", activeConnections, AtomicInteger::get)
                 .description("Current number of active client connections")
                 .register(meterRegistry);
+
+        // 启动定时清理任务：每小时执行一次，删除 3 天前且已消费的数据
+        scheduler.scheduleAtFixedRate(() -> {
+            try {
+                long minOffset = getMinConsumerOffset();
+                long threeDaysMs = 3L * 24 * 60 * 60 * 1000;
+                int deleted = getMessageLog().deleteOldSegments(minOffset, threeDaysMs);
+                if (deleted > 0) {
+                    log.info("Cleanup deleted {} segments", deleted);
+                }
+            } catch (Exception e) {
+                log.error("Segment cleanup failed", e);
+            }
+        }, 1, 1, TimeUnit.HOURS);
     }
 
     /**
@@ -118,5 +135,23 @@ public class BrokerStore {
 
     public void onClientDisconnected() {
         activeConnections.decrementAndGet();
+    }
+
+    // 定时清理入口（由 BrokerServer 的调度器调用）
+    public int cleanupOldSegments(long maxAgeMillis) {
+        long minOffset = getMinConsumerOffset();
+        return messageLog.deleteOldSegments(minOffset, maxAgeMillis);
+    }
+
+    public long getMinConsumerOffset() {
+        long min = Long.MAX_VALUE;
+        for (ConsumeIndexManager idx : groupIndexes.values()) {
+            min = Math.min(min, idx.getConsumerOffset());
+        }
+        return min == Long.MAX_VALUE ? 0 : min;
+    }
+
+    public MessageLog getMessageLog() {
+        return messageLog;
     }
 }

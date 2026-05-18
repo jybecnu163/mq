@@ -48,8 +48,7 @@ public class Consumer {
                 Throwable cause = e.getCause();
                 if (cause instanceof RuntimeException && "Connection not available".equals(cause.getMessage())) {
                     log.warn("Connection not available, retrying in 3s...");
-                    Thread.sleep(3000);
-                    retries++;
+                    Thread.sleep(3000L * retries++);
                 } else {
                     throw new RuntimeException("Pull failed", e);
                 }

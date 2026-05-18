@@ -1,5 +1,8 @@
 package com.mymq.broker.metrics;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mymq.broker.store.BrokerStore;
 import io.micrometer.prometheus.PrometheusMeterRegistry;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.Unpooled;
@@ -12,6 +15,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * 内嵌 HTTP 服务器，暴露 /metrics 给 Prometheus 抓取
@@ -26,7 +31,7 @@ public class MetricsServer {
         this.registry = registry;
     }
 
-    public void start() throws InterruptedException {
+    public void start(BrokerStore store) throws InterruptedException {
         EventLoopGroup bossGroup = new NioEventLoopGroup(1);
         EventLoopGroup workerGroup = new NioEventLoopGroup();
         try {
@@ -41,22 +46,9 @@ public class MetricsServer {
                                     .addLast(new HttpObjectAggregator(65536))
                                     .addLast(new SimpleChannelInboundHandler<FullHttpRequest>() {
                                         @Override
-                                        protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest request) {
+                                        protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest request) throws JsonProcessingException {
                                             // 在 channelRead0 中增加判断
-                                            if ("/hello".equals(request.uri())) {
-                                                String html = "<html><body><h1>Hello World</h1></body></html>";
-                                                FullHttpResponse response = new DefaultFullHttpResponse(
-                                                        HttpVersion.HTTP_1_1,
-                                                        HttpResponseStatus.OK,
-                                                        Unpooled.copiedBuffer(html, StandardCharsets.UTF_8));
-                                                response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/html; charset=UTF-8");
-                                                ctx.writeAndFlush(response);
-                                            } else if ("/health".equals(request.uri())) {
-                                                FullHttpResponse health = new DefaultFullHttpResponse(
-                                                        HttpVersion.HTTP_1_1, HttpResponseStatus.OK,
-                                                        Unpooled.copiedBuffer("UP", StandardCharsets.UTF_8));
-                                                ctx.writeAndFlush(health);
-                                            } else if ("/metrics".equals(request.uri())) {
+                                            if ("/metrics".equals(request.uri())) {
                                                 String metrics = registry.scrape();
                                                 FullHttpResponse response = new DefaultFullHttpResponse(
                                                         HttpVersion.HTTP_1_1, HttpResponseStatus.OK,
@@ -64,6 +56,78 @@ public class MetricsServer {
                                                 response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain; charset=UTF-8");
                                                 ctx.writeAndFlush(response);
                                             } else {
+                                                String uri = request.uri();
+                                                if ("/hello".equals(uri)) {
+                                                    String html = "<html><body><h1>Hello World</h1></body></html>";
+                                                    FullHttpResponse response = new DefaultFullHttpResponse(
+                                                            HttpVersion.HTTP_1_1,
+                                                            HttpResponseStatus.OK,
+                                                            Unpooled.copiedBuffer(html, StandardCharsets.UTF_8));
+                                                    response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/html; charset=UTF-8");
+                                                    ctx.writeAndFlush(response);
+                                                    return;
+                                                }
+
+                                                if ("/health".equals(uri)) {
+                                                    FullHttpResponse health = new DefaultFullHttpResponse(
+                                                            HttpVersion.HTTP_1_1, HttpResponseStatus.OK,
+                                                            Unpooled.copiedBuffer("<html><body><h1>UP</h1></body></html>", StandardCharsets.UTF_8));
+                                                    health.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/html; charset=UTF-8");
+                                                    ctx.writeAndFlush(health);
+                                                    return;
+                                                }
+
+                                                // 新增：获取所有 topic
+                                                if ("/admin/topics".equals(uri)) {
+                                                    String json = new ObjectMapper().writeValueAsString(store.getAllTopics());
+                                                    String html = "<html><body>" + json + "</body></html>";
+                                                    FullHttpResponse response = new DefaultFullHttpResponse(
+                                                            HttpVersion.HTTP_1_1, HttpResponseStatus.OK,
+                                                            Unpooled.copiedBuffer(html, StandardCharsets.UTF_8));
+                                                    response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/html; charset=UTF-8");
+                                                    ctx.writeAndFlush(response);
+                                                    return;
+                                                }
+
+                                                // 新增：获取消费者组
+                                                if ("/admin/consumers".equals(uri)) {
+                                                    String json = new ObjectMapper().writeValueAsString(store.getConsumerGroups());
+                                                    String html = "<html><body>" + json + "</body></html>";
+                                                    FullHttpResponse response = new DefaultFullHttpResponse(
+                                                            HttpVersion.HTTP_1_1, HttpResponseStatus.OK,
+                                                            Unpooled.copiedBuffer(html, StandardCharsets.UTF_8));
+                                                    response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/html; charset=UTF-8");
+                                                    ctx.writeAndFlush(response);
+                                                    return;
+                                                }
+
+                                                // 新增：获取统计数据
+                                                if ("/admin/stats".equals(uri)) {
+                                                    Map<String, Object> stats = new HashMap<>();
+                                                    stats.put("produced", store.getMinuteProductionRates());
+                                                    stats.put("consumed", store.getMinuteConsumptionRates());
+
+                                                    String html = "<html><body>" + new ObjectMapper().writeValueAsString(stats) + "</body></html>";
+                                                    FullHttpResponse response = new DefaultFullHttpResponse(
+                                                            HttpVersion.HTTP_1_1, HttpResponseStatus.OK,
+                                                            Unpooled.copiedBuffer(html, StandardCharsets.UTF_8));
+
+                                                    response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/html; charset=UTF-8");
+                                                    ctx.writeAndFlush(response);
+                                                    return;
+                                                }
+
+                                                // 可选：内置管理页面
+                                                if ("/admin".equals(uri) || "/admin/".equals(uri)) {
+                                                    String html = "<html><body>...</body></html>";
+                                                    FullHttpResponse response = new DefaultFullHttpResponse(
+                                                            HttpVersion.HTTP_1_1, HttpResponseStatus.OK,
+                                                            Unpooled.copiedBuffer(html, StandardCharsets.UTF_8));
+                                                    response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/html; charset=UTF-8");
+                                                    ctx.writeAndFlush(response);
+                                                    return;
+                                                }
+
                                                 FullHttpResponse response = new DefaultFullHttpResponse(
                                                         HttpVersion.HTTP_1_1, HttpResponseStatus.NOT_FOUND);
                                                 ctx.writeAndFlush(response);

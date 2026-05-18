@@ -76,10 +76,10 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
     }
 
     private void handleSend(ChannelHandlerContext ctx, Message msg) {
+        String topic = msg.getTopic();
+        String body = msg.getBody();
+        String tags = msg.getTags();  // 获取 tags
         try {
-            String topic = msg.getTopic();
-            String body = msg.getBody();
-            String tags = msg.getTags();  // 获取 tags
             long offset = store.appendMessage(topic, body, tags);
 
             log.info("Message stored: topic={}, offset={}, body={}", topic, offset, body);
@@ -106,6 +106,10 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
             error.setRequestId(msg.getRequestId());
             ctx.writeAndFlush(error);
         }
+        // 动态增加带 topic 标签的计数器
+        store.getMeterRegistry().counter("mq_messages_produced_total",
+                "topic", topic).increment();
+        store.getProducedThisMinute().incrementAndGet();
     }
 
     /**
@@ -242,10 +246,10 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
     }
 
     private void handleAck(ChannelHandlerContext ctx, Message msg) throws Exception {
+        String topic = msg.getTopic();
+        String group = msg.getGroup() != null ? msg.getGroup() : "default";
+        long offset = msg.getPullOffset();
         try {
-            String topic = msg.getTopic();
-            String group = msg.getGroup() != null ? msg.getGroup() : "default";
-            long offset = msg.getPullOffset();
             ConsumeIndexManager indexMgr = store.getOrCreateIndex(topic, group);
             if (indexMgr != null) {
                 indexMgr.commitOffset(offset);
@@ -262,6 +266,9 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
             error.setRequestId(msg.getRequestId());
             ctx.writeAndFlush(error);
         }
+
+        store.getMeterRegistry().counter("mq_messages_consumed_total", "topic", topic, "group", group).increment();
+        store.getConsumedThisMinute().incrementAndGet();
     }
 
     @Override

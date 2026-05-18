@@ -39,7 +39,7 @@ public class BrokerServer {
         // 启动指标 HTTP 服务（独立线程）
         Thread metricsThread = new Thread(() -> {
             try {
-                new MetricsServer(metricsPort, meterRegistry).start();
+                new MetricsServer(metricsPort, meterRegistry).start(store);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
@@ -83,7 +83,7 @@ public class BrokerServer {
                 .getOrDefault("METRICS_PORT", "8081"));
         String dataDir = System.getenv()
                 .getOrDefault("MQ_DATA_DIR", "./data");
-        
+
         new BrokerServer(port, metricsPort, dataDir).start();
     }
 }

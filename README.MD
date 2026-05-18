@@ -1,16 +1,19 @@
-#   mymq —— 轻量级消息中间件
+# mymq —— 轻量级消息中间件
+
 my-mq 是一个用 Java 编写的学习型消息中间件，受 QMQ 的设计启发，实现了其核心特性：
 消息持久化、任意延时消息、长轮询和基于 Tag 的服务端过滤。项目使用 Netty 作为网络框架，
 以本地文件系统作为存储，无外部依赖，便于理解和二次开发。
 
-##   ✨ 核心特性
+## ✨ 核心特性
+
 消息持久化：消息顺序追加写入日志文件，支持快速随机读取，重启不丢失。
 独立消费者组：每个 Topic + ConsumerGroup 拥有独立的消费索引和进度，互不干扰。
 Pull + 长轮询：消费者主动拉取，无消息时挂起连接，新消息到达后毫秒级推送。
 任意延时消息：两级时间轮（磁盘按时分片持久化 + 内存时间轮），支持任意时长的延迟，重启后未到期消息自动恢复。
 服务端 Tag 过滤：消息可携带标签，消费者按需订阅，不匹配的消息自动跳过，减少无效传输。
 
-##   📁 项目结构
+## 📁 项目结构
+
 ```text
 my-mq/
 ├── pom.xml                          # 父 POM，管理模块与依赖版本
@@ -20,7 +23,8 @@ my-mq/
 └── my-mq-example/                   # 示例入口：Broker 启动类、客户端示例
 ```
 
-##   🧱 系统架构
+## 🧱 系统架构
+
 ```text
 Client (Producer / Consumer)
 │  Netty 长连接 (自定义二进制协议)
@@ -33,9 +37,11 @@ Broker (单进程)
 │   └── DelayMessageScheduler # 两级时间轮
 └── 长轮询挂起管理
 ```
+
 所有数据默认存储于启动目录下的 data/ 文件夹中。
 
-##   🚀 快速开始
+## 🚀 快速开始
+
 环境要求：JDK 17+、Maven 3.6+
 
 1. 构建项目
@@ -55,16 +61,19 @@ Broker (单进程)
 ```bash
 mvn -pl my-mq-example exec:java -Dexec.mainClass="com.mymq.example.ExampleClientMain"
 ```
+
 示例中会启动一个 Producer 持续发送消息，两个 Consumer（group-1、group-2）独立消费，同时演示 Tag 过滤和延时消息。
 
-##   📡 协议支持
+## 📡 协议支持
+
     命令	方向	说明
     SEND	Client→Broker	发送普通/延时消息（通过 delayMs 区分）
     PULL	Client→Broker	拉取消息（支持长轮询和 Tag 过滤）
     ACK	Client→Broker	确认消息消费，推进消费进度
     RESPONSE	Broker→Client	所有请求的响应（含成功/错误信息）
 
-##   ⚙️ 主要配置
+## ⚙️ 主要配置
+
     当前所有配置均硬编码在代码中，主要参数：
     
     参数	位置	默认值	说明
@@ -74,6 +83,7 @@ mvn -pl my-mq-example exec:java -Dexec.mainClass="com.mymq.example.ExampleClient
     未来可抽取为外部配置文件（如 config.yaml）。
 
 ## ✅ 已实现功能清单
+
 🧱 基础通信与协议
 自定义二进制协议（基于 Netty），支持 SEND、PULL、ACK、RESPONSE 命令。
 LengthFieldBasedFrameDecoder 解决 TCP 粘包/拆包。
@@ -89,6 +99,7 @@ Pull 模型：消费者主动拉取，服务端返回下一条消息。
 长轮询（Long Polling）：无消息时挂起连接，新消息到达后毫秒级推送，超时 5 秒返回空响应。
 多消费者组独立消费：每个组独立维护索引和进度，互相不干扰。
 消费确认（ACK）：顺序确认，只有当 ACK 偏移严格递增时才推进进度。
+指定时间段开始消费，可用适度丢弃过往数据
 
 ⏱️ 延时消息（核心亮点）
 两级时间轮：
@@ -113,11 +124,17 @@ ACK 请求有明确响应，防止客户端永久阻塞。
 单生产者写10W消息约9s
 10生产者分别写10W消息约28s，tps~=3.5W
 
-##   🗺️ 未来计划
+新增 接口展示当前系统在线topic和consumer
+http://localhost:8081/admin/topic
+http://localhost:8081/admin/consumers
+
+## 🗺️ 未来计划
+
     事务消息（与本地数据库事务绑定）
     消息重试与死信队列
     集群化（多 Broker、分区、副本）
     可视化管理控制台
 
-##   📄 许可
+## 📄 许可
+
 本项目仅供学习交流使用。

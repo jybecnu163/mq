@@ -1,17 +1,21 @@
 package com.mymq.broker.store;
 
-import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicLongArray;
 
 /**
  * Broker 级别的存储管理器，单例（整个 Broker 进程仅一个实例）
@@ -27,10 +31,19 @@ public class BrokerStore {
     private final String dataDir;
 
     private final DelayMessageScheduler delayScheduler;
-
-    // 指标
-    private final Counter messagesProduced;
+    private final MeterRegistry meterRegistry;
     private final AtomicInteger activeConnections = new AtomicInteger(0);
+
+    // 当前分钟的临时累加器
+    private final AtomicLong producedThisMinute = new AtomicLong();
+    private final AtomicLong consumedThisMinute = new AtomicLong();
+
+    // 过去 60 分钟的环形缓冲区
+    private final AtomicLongArray productionRates = new AtomicLongArray(60);
+    private final AtomicLongArray consumptionRates = new AtomicLongArray(60);
+
+    // 环形缓冲区当前写入位置
+    private volatile int minuteIndex = 0;
 
     public BrokerStore(String dataDir, MeterRegistry meterRegistry) throws Exception {
         this.dataDir = dataDir;
@@ -43,7 +56,7 @@ public class BrokerStore {
                 long offset = messageLog.append(topic, body, tags);
                 // 为所有已注册的消费者组追加索引
                 for (Map.Entry<String, ConsumeIndexManager> entry : groupIndexes.entrySet()) {
-                    if (entry.getKey().startsWith(topic + "-")) {
+                    if (entry.getKey().startsWith(topic + "!@#$")) {
                         entry.getValue().appendOffset(offset, now);
                     }
                 }
@@ -53,13 +66,9 @@ public class BrokerStore {
                 e.printStackTrace();
             }
         });
+        this.meterRegistry = meterRegistry;
         // 从磁盘恢复未到期的延时消息
         delayScheduler.recover();
-
-        // 注册指标
-        this.messagesProduced = Counter.builder("mq_messages_produced_total")
-                .description("Total number of messages produced")
-                .register(meterRegistry);
 
         // 使用 Gauge 暴露活跃连接数
         Gauge.builder("mq_active_connections", activeConnections, AtomicInteger::get)
@@ -79,6 +88,15 @@ public class BrokerStore {
                 log.error("Segment cleanup failed", e);
             }
         }, 1, 1, TimeUnit.HOURS);
+
+        // 每分钟轮转一次
+        Executors.newSingleThreadScheduledExecutor().scheduleAtFixedRate(() -> {
+            long prod = producedThisMinute.getAndSet(0);
+            long cons = consumedThisMinute.getAndSet(0);
+            productionRates.set(minuteIndex, prod);
+            consumptionRates.set(minuteIndex, cons);
+            minuteIndex = (minuteIndex + 1) % 60;
+        }, 1, 1, TimeUnit.MINUTES);
     }
 
     /**
@@ -96,11 +114,10 @@ public class BrokerStore {
         long offset = messageLog.append(topic, body, tags, now);
         // 为所有已注册组追加索引（带时间戳）
         for (Map.Entry<String, ConsumeIndexManager> entry : groupIndexes.entrySet()) {
-            if (entry.getKey().startsWith(topic + "-")) {
+            if (entry.getKey().startsWith(topic + "!@#$")) {
                 entry.getValue().appendOffset(offset, now);
             }
         }
-        messagesProduced.increment();   // 生产计数+1
         return offset;
     }
 
@@ -120,7 +137,7 @@ public class BrokerStore {
      * 获取或创建指定 topic + group 的消费索引管理器，并自动注册到 topicGroups
      */
     public ConsumeIndexManager getOrCreateIndex(String topic, String group) throws Exception {
-        String key = topic + "-" + group;
+        String key = topic + "!@#$" + group;
         return groupIndexes.computeIfAbsent(key, k -> {
             try {
                 return new ConsumeIndexManager(dataDir, topic, group);
@@ -160,5 +177,66 @@ public class BrokerStore {
 
     public MessageLog getMessageLog() {
         return messageLog;
+    }
+
+    public Set<String> getAllTopics() {
+        Set<String> topics = new HashSet<>();
+        // topic 信息可以从 groupIndexes 的 key 中提取，或者维护一个单独的 topic 集合
+        for (String key : groupIndexes.keySet()) {
+            String topic = key.substring(0, key.lastIndexOf("!@#$"));
+            topics.add(topic);
+        }
+        return topics;
+    }
+
+    public Map<String, Set<String>> getConsumerGroups() {
+        Map<String, Set<String>> topicGroups = new HashMap<>();
+        for (String key : groupIndexes.keySet()) {
+            int idx = key.lastIndexOf("!@#$");
+            String topic = key.substring(0, idx);
+            String group = key.substring(idx + 4);
+            topicGroups.computeIfAbsent(topic, k -> new HashSet<>()).add(group);
+        }
+        return topicGroups;
+    }
+
+    public MeterRegistry getMeterRegistry() {
+        return meterRegistry;
+    }
+
+    public AtomicLongArray getConsumptionRates() {
+        return consumptionRates;
+    }
+
+    public AtomicLongArray getProductionRates() {
+        return productionRates;
+    }
+
+    public AtomicLong getConsumedThisMinute() {
+        return consumedThisMinute;
+    }
+
+    public AtomicLong getProducedThisMinute() {
+        return producedThisMinute;
+    }
+
+    /**
+     * 返回过去 60 分钟的生产量数组，下标 0 是最新一分钟，59 是最远一分钟
+     */
+    public long[] getMinuteProductionRates() {
+        return getLongs(productionRates);
+    }
+
+    public long[] getMinuteConsumptionRates() {
+        return getLongs(consumptionRates);
+    }
+
+    private long[] getLongs(AtomicLongArray consumptionRates) {
+        long[] rates = new long[60];
+        for (int i = 0; i < 60; i++) {
+            int idx = (minuteIndex - 1 - i + 60) % 60;
+            rates[i] = consumptionRates.get(idx);
+        }
+        return rates;
     }
 }

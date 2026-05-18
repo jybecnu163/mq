@@ -5,6 +5,6 @@ scrape_configs:
   - job_name: 'my-mq-broker'
     static_configs:
       # 假设 Broker 在本地运行，metrics 端口 8081
-      - targets: [ 'my-mq-broker:8081' ]
+      - targets: [ 'broker:8081' ]   # 改为 broker，与 docker-compose 中的服务名一致
         labels:
           service: 'my-mq'

@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  broker:
+    build:
+      context: ./my-mq-broker # 构建上下文路径，即 Dockerfile 所在目录
+      dockerfile: Dockerfile  # 指定 Dockerfile 文件名（默认就是 Dockerfile，可省略）
+    ports:
+      - "8080:8080"     # MQ 端口
+      - "8081:8081"     # Metrics 端口
+    volumes:
+      - broker_data:/app/data
+    environment:
+      - MQ_PORT=8080
+      - METRICS_PORT=8081
+      - MQ_DATA_DIR=./data
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    restart: unless-stopped
+
+volumes:
+  broker_data:

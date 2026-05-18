@@ -43,7 +43,15 @@ public class MetricsServer {
                                         @Override
                                         protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest request) {
                                             // 在 channelRead0 中增加判断
-                                            if ("/health".equals(request.uri())) {
+                                            if ("/hello".equals(request.uri())) {
+                                                String html = "<html><body><h1>Hello World</h1></body></html>";
+                                                FullHttpResponse response = new DefaultFullHttpResponse(
+                                                        HttpVersion.HTTP_1_1,
+                                                        HttpResponseStatus.OK,
+                                                        Unpooled.copiedBuffer(html, StandardCharsets.UTF_8));
+                                                response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/html; charset=UTF-8");
+                                                ctx.writeAndFlush(response);
+                                            } else if ("/health".equals(request.uri())) {
                                                 FullHttpResponse health = new DefaultFullHttpResponse(
                                                         HttpVersion.HTTP_1_1, HttpResponseStatus.OK,
                                                         Unpooled.copiedBuffer("UP", StandardCharsets.UTF_8));

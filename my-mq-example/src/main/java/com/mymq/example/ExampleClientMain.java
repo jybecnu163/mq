@@ -44,7 +44,7 @@ public class ExampleClientMain {
                     // 发送一条 10 秒后投递的延时消息
                     Message delayMsg = Message.createDelay(topic,
                             sdf.format(System.currentTimeMillis()) + " This is a delayed message",
-                            1000 * new Random().nextInt(5, 30));
+                            1000L * new Random().nextInt());
                     delayMsg.setTags(tagsArr[rand.nextInt(tagsArr.length)]);
                     producer.send(delayMsg); // 或直接 producer.sendDelay(...)
 

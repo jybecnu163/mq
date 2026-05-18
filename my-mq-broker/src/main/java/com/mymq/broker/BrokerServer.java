@@ -77,6 +77,13 @@ public class BrokerServer {
     }
 
     public static void main(String[] args) throws Exception {
-        new BrokerServer(8080, 8081, "./data").start();
+        int port = Integer.parseInt(System.getenv()
+                .getOrDefault("MQ_PORT", "8080"));
+        int metricsPort = Integer.parseInt(System.getenv()
+                .getOrDefault("METRICS_PORT", "8081"));
+        String dataDir = System.getenv()
+                .getOrDefault("MQ_DATA_DIR", "./data");
+        
+        new BrokerServer(port, metricsPort, dataDir).start();
     }
 }

@@ -7,6 +7,8 @@ import com.mymq.common.protocol.Command;
 import com.mymq.common.protocol.Message;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -14,6 +16,7 @@ import java.util.Map;
 import java.util.concurrent.*;
 
 public class MessageHandler extends SimpleChannelInboundHandler<Message> {
+    private static final Logger log = LoggerFactory.getLogger(MessageHandler.class);
 
     private final BrokerStore store;
     // 主题 -> 挂起的拉取请求列表（线程安全）
@@ -58,7 +61,8 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
 
             // 委托给 BrokerStore 的延时调度
             store.scheduleDelayMessage(expireTime, topic, body, msg.getTags());
-            System.out.println("Delay message scheduled: topic=" + topic + ", body=" + body + ", expireAt=" + expireTime);
+
+            log.info("Delay message scheduled: topic={}, body={}, expireAt={}", topic, body, expireTime);
 
             Message ack = new Message(Command.RESPONSE, topic, "OK");
             ack.setRequestId(msg.getRequestId());
@@ -77,7 +81,8 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
             String body = msg.getBody();
             String tags = msg.getTags();  // 获取 tags
             long offset = store.appendMessage(topic, body, tags);
-            System.out.println("Message stored: topic=" + topic + ", offset=" + offset + ", body=" + body);
+
+            log.info("Message stored: topic={}, offset={}, body={}", topic, offset, body);
 
             // 遍历所有已注册组，自动追加索引   // 追加索引到所有组（同前）
             for (Map.Entry<String, ConsumeIndexManager> entry : store.getAllGroupIndexes().entrySet()) {
@@ -130,7 +135,8 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                         resp.setRequestId(pending.requestId);
                         resp.setPullOffset(indexMgr.getConsumerOffset());
                         pending.ctx.writeAndFlush(resp);
-                        System.out.println("PULL woken: topic=" + pending.topic + ", group=" + pending.group);
+
+                        log.info("PULL woken: topic={}, group={}", pending.topic, pending.group);
                     } else {
                         // 极端情况：消息刚被其他消费者取走，仍无新消息，则挂起（此处简单处理，重新挂起）
                         // 但为了避免复杂逻辑，可直接返回空响应
@@ -158,13 +164,12 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
 
             // 获取或创建消费者组索引（注册动作内置于 getOrCreateIndex）
             ConsumeIndexManager indexMgr = store.getOrCreateIndex(topic, group);
-            System.out.println("Group active: topic=" + topic + ", group=" + group);
+
+            log.info("Group active: topic={}, group={}", topic, group);
             // 循环查找匹配的消息
             while (true) {
                 long physicalOffset = indexMgr.peekNextOffset();
-                System.out.println("PULL debug: topic=" + topic + ", group=" + group +
-                        ", consumerOffset=" + indexMgr.getConsumerOffset() +
-                        ", physicalOffset=" + physicalOffset);
+
                 if (physicalOffset < 0) {
                     // 无消息可消费，挂起长轮询  ... 挂起逻辑不变 ...
 
@@ -173,8 +178,6 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                     // 将请求加入该 topic 的挂起列表
                     List<PendingPull> list = pendingPulls.computeIfAbsent(topic, k -> new CopyOnWriteArrayList<>());
                     list.add(pending);
-                    System.out.println("PULL suspended: topic=" + topic + ", group=" + group);
-
                     // 启动超时任务：5秒后自动返回空响应
                     pending.timeoutFuture = scheduler.schedule(() -> {
                         // 检查请求是否仍在列表中（可能已被唤醒移除）
@@ -184,7 +187,6 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                             emptyResp.setRequestId(msg.getRequestId());
                             emptyResp.setPullOffset(-1);
                             ctx.writeAndFlush(emptyResp);
-                            System.out.println("PULL timeout: topic=" + topic + ", group=" + group);
                         }
                     }, 5000, TimeUnit.MILLISECONDS);
 
@@ -202,12 +204,10 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                     resp.setRequestId(msg.getRequestId());
                     resp.setPullOffset(indexMgr.getConsumerOffset());
                     ctx.writeAndFlush(resp);
-                    System.out.println("PULL matched: topic=" + topic + ", group=" + group + ", tags=" + messageTags);
                     return;
                 } else {
                     // 不匹配，自动跳过（ACK 推进偏移）
                     indexMgr.commitOffset(indexMgr.getConsumerOffset());
-                    System.out.println("PULL skipped: topic=" + topic + ", group=" + group + ", tags=" + messageTags);
                     // 继续循环，尝试下一条消息
                 }
             }
@@ -241,7 +241,6 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
             ConsumeIndexManager indexMgr = store.getOrCreateIndex(topic, group);
             if (indexMgr != null) {
                 indexMgr.commitOffset(offset);
-                System.out.println("ACK: topic=" + topic + ", group=" + group + ", offset=" + offset);
             }
 
             // 回复确认，防止客户端阻塞
@@ -257,11 +256,18 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
         }
     }
 
+    @Override
+    public void channelActive(ChannelHandlerContext ctx) throws Exception {
+        store.onClientConnected();
+        super.channelActive(ctx);
+    }
+
     /**
      * 连接断开时清理该连接的所有挂起请求
      */
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+        store.onClientDisconnected();
         // 遍历所有 topic 的挂起列表，移除属于该 ctx 的请求
         for (List<PendingPull> list : pendingPulls.values()) {
             list.removeIf(pending -> pending.ctx.equals(ctx) && pending.timeoutFuture != null && pending.timeoutFuture.cancel(false));
@@ -272,7 +278,7 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         if (cause instanceof java.io.IOException) {
-            System.out.println("Client disconnected: " + ctx.channel().remoteAddress());
+            log.info("Client disconnected: {}", ctx.channel().remoteAddress());
         } else {
             cause.printStackTrace();
         }
@@ -294,4 +300,6 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
             this.topic = topic;
         }
     }
+
+
 }

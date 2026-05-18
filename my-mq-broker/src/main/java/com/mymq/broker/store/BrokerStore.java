@@ -1,13 +1,23 @@
 package com.mymq.broker.store;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Broker 级别的存储管理器，单例（整个 Broker 进程仅一个实例）
  * 负责管理 MessageLog、消费者索引等全局状态
  */
 public class BrokerStore {
+    private static final Logger log = LoggerFactory.getLogger(BrokerStore.class);
+
+
     private final MessageLog messageLog;
     // 所有消费者组索引管理器，key = "topic-group"
     private final Map<String, ConsumeIndexManager> groupIndexes = new ConcurrentHashMap<>();
@@ -15,7 +25,11 @@ public class BrokerStore {
 
     private final DelayMessageScheduler delayScheduler;
 
-    public BrokerStore(String dataDir) throws Exception {
+    // 指标
+    private final Counter messagesProduced;
+    private final AtomicInteger activeConnections = new AtomicInteger(0);
+
+    public BrokerStore(String dataDir, MeterRegistry meterRegistry) throws Exception {
         this.dataDir = dataDir;
         this.messageLog = new MessageLog(dataDir);
 
@@ -29,13 +43,24 @@ public class BrokerStore {
                         entry.getValue().appendOffset(offset);
                     }
                 }
-                System.out.println("Delay message expired and delivered: topic=" + topic + ", body=" + body);
+                log.info("Delay message expired and delivered: topic={}, body={}", topic, body);
+
             } catch (Exception e) {
                 e.printStackTrace();
             }
         });
         // 从磁盘恢复未到期的延时消息
         delayScheduler.recover();
+
+        // 注册指标
+        this.messagesProduced = Counter.builder("mq_messages_produced_total")
+                .description("Total number of messages produced")
+                .register(meterRegistry);
+
+        // 使用 Gauge 暴露活跃连接数
+        Gauge.builder("mq_active_connections", activeConnections, AtomicInteger::get)
+                .description("Current number of active client connections")
+                .register(meterRegistry);
     }
 
     /**
@@ -49,7 +74,9 @@ public class BrokerStore {
      * 追加消息，返回物理偏移量
      */
     public long appendMessage(String topic, String body, String tags) throws Exception {
-        return messageLog.append(topic, body, tags);
+        long offset = messageLog.append(topic, body, tags);
+        messagesProduced.increment();   // 生产计数+1
+        return offset;
     }
 
     // 原有 readMessage 删除，或改为调用 readMessageData().getBody()
@@ -83,5 +110,13 @@ public class BrokerStore {
      */
     public Map<String, ConsumeIndexManager> getAllGroupIndexes() {
         return groupIndexes;
+    }
+
+    public void onClientConnected() {
+        activeConnections.incrementAndGet();
+    }
+
+    public void onClientDisconnected() {
+        activeConnections.decrementAndGet();
     }
 }

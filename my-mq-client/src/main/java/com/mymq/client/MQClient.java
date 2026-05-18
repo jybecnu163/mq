@@ -9,11 +9,14 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
 import io.netty.handler.codec.LengthFieldPrepender;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class MQClient {
+    private static final Logger log = LoggerFactory.getLogger(MQClient.class);
     private final String host;
     private final int port;
     private Channel channel;
@@ -51,7 +54,7 @@ public class MQClient {
                 });
         ChannelFuture f = b.connect(host, port).sync();
         channel = f.channel();
-        System.out.println("Connected to broker at " + host + ":" + port);
+        log.info("Connected to broker at {}:{}", host, port);
     }
 
     public CompletableFuture<Message> send(Message msg) {

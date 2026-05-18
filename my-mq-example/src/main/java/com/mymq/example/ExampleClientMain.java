@@ -6,11 +6,14 @@ import com.mymq.client.Producer;
 import com.mymq.common.protocol.Command;
 import com.mymq.common.protocol.Message;
 
+import java.text.SimpleDateFormat;
 import java.util.Random;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 public class ExampleClientMain {
+    static SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss:DDD");
+
     public static void main(String[] args) throws Exception {
         MQClient prodClient = new MQClient("localhost", 8080);
         MQClient consClient1 = new MQClient("localhost", 8080);
@@ -36,11 +39,11 @@ public class ExampleClientMain {
             while (true) {
                 try {
                     producer.send(new Message(Command.SEND, topic,
-                                    System.currentTimeMillis() + " Hello QMQ!" + i++),
+                                    sdf.format(System.currentTimeMillis()) + " Hello QMQ!" + i++),
                             tagsArr[rand.nextInt(tagsArr.length)]);
                     // 发送一条 10 秒后投递的延时消息
                     Message delayMsg = Message.createDelay(topic,
-                            System.currentTimeMillis() + " This is a delayed message",
+                            sdf.format(System.currentTimeMillis()) + " This is a delayed message",
                             1000 * new Random().nextInt(5, 30));
                     delayMsg.setTags(tagsArr[rand.nextInt(tagsArr.length)]);
                     producer.send(delayMsg); // 或直接 producer.sendDelay(...)
@@ -59,6 +62,7 @@ public class ExampleClientMain {
                 for (int i = 0; i < 5000; ) {
                     Message msg = consumer1.pull();
                     if (msg != null && msg.getBody() != null) {
+                        // 消费者需要处理 pull() 返回 null 的情况（长轮询超时）
                         i++;
 
                         System.out.println("Consumer1 received: " + msg.getBody() +

@@ -1,0 +1,10 @@
+global:
+  scrape_interval: 15s       # 每15秒抓取一次
+
+scrape_configs:
+  - job_name: 'my-mq-broker'
+    static_configs:
+      # 假设 Broker 在本地运行，metrics 端口 8081
+      - targets: [ 'my-mq-broker:8081' ]
+        labels:
+          service: 'my-mq'

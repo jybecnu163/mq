@@ -42,7 +42,13 @@ public class MetricsServer {
                                     .addLast(new SimpleChannelInboundHandler<FullHttpRequest>() {
                                         @Override
                                         protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest request) {
-                                            if ("/metrics".equals(request.uri())) {
+                                            // 在 channelRead0 中增加判断
+                                            if ("/health".equals(request.uri())) {
+                                                FullHttpResponse health = new DefaultFullHttpResponse(
+                                                        HttpVersion.HTTP_1_1, HttpResponseStatus.OK,
+                                                        Unpooled.copiedBuffer("UP", StandardCharsets.UTF_8));
+                                                ctx.writeAndFlush(health);
+                                            } else if ("/metrics".equals(request.uri())) {
                                                 String metrics = registry.scrape();
                                                 FullHttpResponse response = new DefaultFullHttpResponse(
                                                         HttpVersion.HTTP_1_1, HttpResponseStatus.OK,
@@ -54,6 +60,18 @@ public class MetricsServer {
                                                         HttpVersion.HTTP_1_1, HttpResponseStatus.NOT_FOUND);
                                                 ctx.writeAndFlush(response);
                                             }
+                                        }
+                                    }).addLast(new ChannelInboundHandlerAdapter() {
+                                        @Override
+                                        public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+                                            if (cause instanceof java.io.IOException) {
+                                                // 静默处理连接重置，不打印堆栈
+                                                log.info(cause.getMessage());
+                                            } else {
+                                                // 其他异常记录日志（可选）
+                                                log.error(cause.getMessage(), cause);
+                                            }
+                                            ctx.close();
                                         }
                                     });
                         }

@@ -34,26 +34,40 @@ public class ExampleClientMain {
 //        让出 CPU 保证注册请求到达服务端
         Thread.sleep(200);
         // 2. 启动 Producer 线程
-        new Thread(() -> {
-            int i = 0;
-            while (true) {
-                try {
-                    producer.send(new Message(Command.SEND, topic,
-                                    sdf.format(System.currentTimeMillis()) + " Hello QMQ!" + i++),
-                            tagsArr[rand.nextInt(tagsArr.length)]);
-                    // 发送一条 10 秒后投递的延时消息
-                    Message delayMsg = Message.createDelay(topic,
-                            sdf.format(System.currentTimeMillis()) + " This is a delayed message",
-                            1000L * new Random().nextInt());
-                    delayMsg.setTags(tagsArr[rand.nextInt(tagsArr.length)]);
-                    producer.send(delayMsg); // 或直接 producer.sendDelay(...)
+        for (int n = 0; n < 10; n++) {
+            // 单线程生产10W，大概10.5s，
+            // 10线程分别生产10W，大概30s，sdf.format 和 rand 可能时单线程
 
-                    TimeUnit.MILLISECONDS.sleep(1500);
-                } catch (Exception e) {
-                    System.err.println("Send error: " + e.getMessage());
+            // 去除 sdf.format 和 rand =》 28.8s，那么大概tps=3.5W
+
+            new Thread(() -> {
+                String[] tags = new String[]{"paid", "order", "paid,order"};
+                int i = 0;
+                long start = System.currentTimeMillis();
+                while (true && i < 100000) {
+                    try {
+//                    producer.send(new Message(Command.SEND, topic,
+//                                    sdf.format(System.currentTimeMillis()) + " Hello QMQ!" + i++),
+//                            tagsArr[rand.nextInt(tagsArr.length)]);
+
+                        producer.send(new Message(Command.SEND, topic, " Hello QMQ!" + i++),
+                                tags[i % 3]);
+
+                        // 发送一条 10 秒后投递的延时消息
+//                    Message delayMsg = Message.createDelay(topic,
+//                            sdf.format(System.currentTimeMillis()) + " This is a delayed message",
+//                             1000 * new Random().nextInt(5，30));
+//                    delayMsg.setTags(tagsArr[rand.nextInt(tagsArr.length)]);
+//                    producer.send(delayMsg); // 或直接 producer.sendDelay(...)
+
+//                    TimeUnit.MILLISECONDS.sleep(1500);
+                    } catch (Exception e) {
+                        System.err.println("Send error: " + e.getMessage());
+                    }
                 }
-            }
-        }).start();
+                System.err.println(System.currentTimeMillis() - start);
+            }).start();
+        }
 
         // 3. 消费者线程（使用独立连接，逻辑不变）
         new Thread(() -> {
@@ -65,12 +79,12 @@ public class ExampleClientMain {
                         // 消费者需要处理 pull() 返回 null 的情况（长轮询超时）
                         i++;
 
-                        System.out.println("Consumer1 received: " + msg.getBody() +
-                                " (offset=" + msg.getPullOffset() + ")");
+//                        System.out.println("Consumer1 received: " + msg.getBody() +
+//                                " (offset=" + msg.getPullOffset() + ")");
                         // 确认消息处理完成
                         consumer1.ack();
                     } else {
-                        System.out.println("No message available, Consumer1 retrying in 1s...");
+//                        System.out.println("No message available, Consumer1 retrying in 1s...");
                         TimeUnit.MILLISECONDS.sleep(1000);
                     }
                 }
@@ -87,12 +101,12 @@ public class ExampleClientMain {
                     if (msg != null && msg.getBody() != null) {
                         i++;
 
-                        System.out.println("Consumer2 received: " + msg.getBody() +
-                                " (offset=" + msg.getPullOffset() + ")");
+//                        System.out.println("Consumer2 received: " + msg.getBody() +
+//                                " (offset=" + msg.getPullOffset() + ")");
                         // 确认消息处理完成
                         consumer2.ack();
                     } else {
-                        System.out.println("No message available, Consumer2 retrying in 1s...");
+//                        System.out.println("No message available, Consumer2 retrying in 1s...");
                         TimeUnit.MILLISECONDS.sleep(1000);
                     }
                 }

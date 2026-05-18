@@ -2,10 +2,14 @@ package com.mymq.client;
 
 import com.mymq.common.protocol.Command;
 import com.mymq.common.protocol.Message;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.ExecutionException;
 
 public class Consumer {
+    private static final Logger log = LoggerFactory.getLogger(Consumer.class);
+
     private final MQClient client;
     private final String topic;
     private final String group;
@@ -27,16 +31,32 @@ public class Consumer {
     /**
      * 拉取一条消息，如果没有新消息返回 null
      */
-    public Message pull() throws ExecutionException, InterruptedException {
+    public Message pull() throws InterruptedException {
         Message request = new Message(Command.PULL, topic, "");
         request.setGroup(group);                // 设置消费者组
         request.setSubscribeTag(subscribeTag);  // 设置订阅标签
         request.setStartTime(startTime);
-        
-        Message response = client.send(request).get();
 
-        if (response.getBody() == null) {
-            return null;
+        Message response = null;
+        int retries = 0;
+        final int maxRetries = 20;
+        while (retries < maxRetries) {
+            try {
+                response = client.send(request).get();
+                retries = maxRetries + 999;
+            } catch (ExecutionException e) {
+                Throwable cause = e.getCause();
+                if (cause instanceof RuntimeException && "Connection not available".equals(cause.getMessage())) {
+                    log.warn("Connection not available, retrying in 3s...");
+                    Thread.sleep(3000);
+                    retries++;
+                } else {
+                    throw new RuntimeException("Pull failed", e);
+                }
+            }
+        }
+        if (retries == maxRetries) {
+            throw new RuntimeException("Could not pull after " + maxRetries + " retries");
         }
 
         // 记录服务端返回的逻辑偏移量，用于后续 ACK

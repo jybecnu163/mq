@@ -58,12 +58,20 @@ public class BrokerServer {
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         protected void initChannel(SocketChannel ch) throws Exception {
+                            /**
+                             * LengthFieldBasedFrameDecoder 和 LengthFieldPrepender 处理 TCP 粘包/拆包，
+                             * 我们使用的是 4 字节长度头。
+                             *
+                             * MessageCodec.Encoder/Decoder 负责 Java 对象与字节数组的互相转换，
+                             * 当前使用 Jackson JSON 序列化
+                             */
                             ch.pipeline()
                                     .addLast(new LengthFieldBasedFrameDecoder(1024 * 1024, 0, 4, 0, 4))
                                     .addLast(new LengthFieldPrepender(4))
                                     .addLast(new MessageCodec.Encoder())
                                     .addLast(new MessageCodec.Decoder())
-                                    .addLast(new MessageHandler(store));  // 传入共享的 store
+                                    // 数据进入后，传入 含store的MessageHandler进行处理
+                                    .addLast(new MessageHandler(store));
                         }
                     });
             ChannelFuture f = b.bind(port).sync();

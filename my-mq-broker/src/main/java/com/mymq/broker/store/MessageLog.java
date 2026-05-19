@@ -111,20 +111,23 @@ public class MessageLog {
     public synchronized long append(String topic, String body, String tags, long timestamp) throws Exception {
         // 需要时创建或切换段
         if (activeSegment == null || activeSegment.size() >= maxSegmentSize) {
+            // 首先检查当前活动段是否达到大小上限，若超过则创建新段。
             rollNewSegment();
         }
 
-        // 序列化消息
+        // 构造 MessageEntry 对象，包含主题、体、标签和时间戳。
         MessageEntry entry = new MessageEntry(topic, body, tags, timestamp);
         byte[] data = MAPPER.writeValueAsBytes(entry);
         int length = data.length;
 
         // 写入格式：[4字节数据长度][实际数据]
+        // 序列化为 JSON 字节数组，前面加上 4 字节长度头，然后调用 Segment.append 写入
         ByteBuffer buf = ByteBuffer.allocate(4 + length);
         buf.putInt(length);
         buf.put(data);
         buf.flip();
 
+        // 返回的 offset 是全局物理偏移量，即该消息在日志文件中的起始位置。
         return activeSegment.append(buf);
     }
 
@@ -341,9 +344,11 @@ public class MessageLog {
          * 追加数据并返回全局偏移量。
          */
         synchronized long append(ByteBuffer buf) throws IOException {
-            long offset = getEndOffset();   // 返回给调用者的全局偏移量
+            // 返回给调用者的全局偏移量
+            long offset = getEndOffset();
             channel.write(buf);
-            wrotePosition += buf.limit();   // buf 已经被写入，limit 等于长度
+            // buf 已经被写入，limit 等于长度
+            wrotePosition += buf.limit();
 
             // 更新最后修改时间（也可依赖操作系统，这里显式设置）
             this.lastModified = System.currentTimeMillis();

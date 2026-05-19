@@ -34,8 +34,10 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
         switch (cmd) {
             case SEND:
                 if (msg.getDelayMs() > 0) {
+                    // 处理延时消息
                     handleDelaySend(ctx, msg);
                 } else {
+                    // 即时消息
                     handleSend(ctx, msg);
                 }
                 break;

@@ -151,6 +151,7 @@ public class MQClient {
             future.completeExceptionally(new RuntimeException("Connection not available"));
             return future;
         }
+        // pendingRequests 是一个 ConcurrentHashMap，存放 requestId -> Future 的映射
         pendingRequests.put(msg.getRequestId(), future);
         ch.writeAndFlush(msg).addListener((ChannelFutureListener) writeFuture -> {
             if (!writeFuture.isSuccess()) {

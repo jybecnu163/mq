@@ -14,7 +14,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 public class ExampleClientMain {
-    static SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss:DDD");
+    private final static SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss:DDD");
 
     public static void main(String[] args) throws Exception {
         MQClient prodClient = new MQClient("localhost", 8080);
@@ -153,6 +153,7 @@ public class ExampleClientMain {
                     for (Message.MessagePayload p : messages) {
                         System.out.println("Consumer3 received: " + p.getBody() +
                                 " (offset=" + messages.size() + ")");
+                        i++;
                     }
                     // 全部处理完后，确认最后一条的偏移量
                     if (!messages.isEmpty()) {

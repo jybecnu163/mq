@@ -1,4 +1,4 @@
-1. 客户端：生产者发送消息
+#  1. 客户端：生产者发送消息
    用户在业务代码中调用 Producer.send()，通过 Netty 自定义协议将消息异步发送给 Broker。
 
 Producer.java
@@ -38,7 +38,7 @@ pendingRequests 是一个 ConcurrentHashMap，存放 requestId -> Future 的映�
 
 消息通过 Netty 的 writeAndFlush 发送出去，如果发送失败则立即让 Future 失败。
 
-2. 网络传输与协议编解码
+#  2. 网络传输与协议编解码
    Netty 管道中配置了以下处理器：
 
 BrokerServer.java (客户端同理)
@@ -62,7 +62,7 @@ Java 对象与字节数组的互相转换，
 当前使用 Jackson
 JSON 序列化。
 
-3. Broker 接收并处理 SEND 命令
+#  3. Broker 接收并处理 SEND 命令
    当消息到达 Broker 时，MessageHandler.channelRead0 根据命令类型分派到 handleSend。
 
 MessageHandler.java
@@ -241,7 +241,7 @@ private void wakeupPendingPulls(String topic) {
 3.4 返回 ACK 给生产者
 最后，Broker 向生产者发送一个 RESPONSE 确认，携带 "OK" 表示消息已可靠存储。生产者侧的 Future.get() 解除阻塞，整个发送过程结束。
 
-4. 消费者拉取消息的过程（简要）
+#  4. 消费者拉取消息的过程（简要）
    消费者通过 Consumer.pull() 发送 PULL 命令。Broker 在 handlePull 中：
 
 获取或创建 ConsumeIndexManager。

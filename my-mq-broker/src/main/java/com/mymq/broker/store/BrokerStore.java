@@ -23,7 +23,6 @@ import java.util.concurrent.atomic.AtomicLongArray;
  */
 public class BrokerStore {
     private static final Logger log = LoggerFactory.getLogger(BrokerStore.class);
-    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
     private final MessageLog messageLog;
     // 所有消费者组索引管理器，key = "topic-group"
@@ -76,6 +75,7 @@ public class BrokerStore {
                 .register(meterRegistry);
 
         // 启动定时清理任务：每小时执行一次，删除 3 天前且已消费的数据
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
         scheduler.scheduleAtFixedRate(() -> {
             try {
                 long minOffset = getMinConsumerOffset();
@@ -136,7 +136,7 @@ public class BrokerStore {
     /**
      * 获取或创建指定 topic + group 的消费索引管理器，并自动注册到 topicGroups
      */
-    public ConsumeIndexManager getOrCreateIndex(String topic, String group) throws Exception {
+    public ConsumeIndexManager getOrCreateIndex(String topic, String group) {
         String key = topic + "!@#$" + group;
         return groupIndexes.computeIfAbsent(key, k -> {
             try {

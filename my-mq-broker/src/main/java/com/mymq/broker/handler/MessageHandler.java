@@ -349,7 +349,7 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
         return false;
     }
 
-    private void handleAck(ChannelHandlerContext ctx, Message msg) throws Exception {
+    private void handleAck(ChannelHandlerContext ctx, Message msg) {
         String topic = msg.getTopic();
         String group = msg.getGroup() != null ? msg.getGroup() : "default";
         long offset = msg.getPullOffset();

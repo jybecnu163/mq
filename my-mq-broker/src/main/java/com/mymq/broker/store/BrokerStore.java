@@ -239,4 +239,16 @@ public class BrokerStore {
         }
         return rates;
     }
+
+    public void close() {
+        messageLog.close();
+        for (ConsumeIndexManager idx : groupIndexes.values()) {
+            try {
+                idx.close();
+            } catch (Exception e) {
+                log.error("Failed to close ConsumeIndexManager", e);
+            }
+        }
+        // 延时调度器如果有资源也可关闭
+    }
 }

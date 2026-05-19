@@ -265,7 +265,7 @@ public class MessageLog {
         private FileChannel channel;   // 读写通道（读写模式）
         private long wrotePosition;          // 当前已写入字节数（仅活动段有意义）
         private volatile long lastModified;  // 段关闭时的系统时间，未关闭时可能为0
-        private long lastTimestamp;  // 段内最后一条消息的时间戳（缓存）
+        private volatile long lastTimestamp;  // 段内最后一条消息的时间戳（缓存）
 
         Segment(File file, long baseOffset) throws IOException {
             this.file = file;
@@ -280,6 +280,11 @@ public class MessageLog {
             // 初始为文件系统时间
             this.lastModified = file.lastModified();
 
+            // 启动时修复可能的末尾损坏
+            if (wrotePosition > 0) {
+                repair();
+            }
+
             // 尝试读取段内最后一条消息的时间戳，缓存起来
             try {
                 if (wrotePosition > 0) {
@@ -289,6 +294,54 @@ public class MessageLog {
                 }
             } catch (Exception e) {
                 this.lastTimestamp = 0; // 兼容旧格式
+            }
+        }
+
+        /**
+         * 修复崩溃导致的不完整消息。从文件头顺序扫描，截断到最后一个有效消息的末尾。
+         */
+        private void repair() throws IOException {
+            long validEnd = 0;       // 最后一个有效消息的结束偏移（全局）
+            long position = 0;
+            ByteBuffer lenBuf = ByteBuffer.allocate(4);
+            final int maxMessageSize = 10 * 1024 * 1024; // 10MB，防止异常长度
+
+            while (position + 4 <= wrotePosition) {
+                lenBuf.clear();
+                channel.read(lenBuf, position);
+                lenBuf.flip();
+                int length = lenBuf.getInt();
+
+                // 长度合法性检查
+                if (length <= 0 || length > maxMessageSize || position + 4 + length > wrotePosition) {
+                    break; // 不合法，停止扫描
+                }
+
+                // 尝试读取并解析消息体，验证 JSON 完整性
+                ByteBuffer dataBuf = ByteBuffer.allocate(length);
+                channel.read(dataBuf, position + 4);
+                dataBuf.flip();
+                byte[] data = new byte[length];
+                dataBuf.get(data);
+
+                try {
+                    MAPPER.readValue(data, MessageEntry.class); // 验证 JSON
+                    // 成功，更新有效结束位置（该消息的末尾）
+                    validEnd = position + 4 + length;
+                    position = validEnd;
+                } catch (Exception e) {
+                    // 解析失败，消息体损坏，停止
+                    break;
+                }
+            }
+
+            // 若文件末尾有损坏，截断文件并更新 wrotePosition
+            if (validEnd < wrotePosition) {
+                log.warn("Segment {} truncated from {} to {} due to corruption",
+                        file.getName(), wrotePosition, validEnd);
+                channel.truncate(validEnd);
+                wrotePosition = validEnd;
+                channel.position(wrotePosition);
             }
         }
 

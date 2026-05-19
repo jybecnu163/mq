@@ -57,12 +57,12 @@ public class ExampleClientMain {
                         producer.send(new Message(Command.SEND, topic, " Hello QMQ!" + i++),
                                 tags[i % 3]);
 
-                        // 发送一条 10 秒后投递的延时消息
-                    Message delayMsg = Message.createDelay(topic,
-                            sdf.format(System.currentTimeMillis()) + " This is a delayed message",
-                             1000 * new Random().nextInt(5, 30));
-                    delayMsg.setTags(tagsArr[rand.nextInt(tagsArr.length)]);
-                    producer.send(delayMsg); // 或直接 producer.sendDelay(...)
+                        // 发送一条 0-60 分钟后投递的延时消息
+                        Message delayMsg = Message.createDelay(topic,
+                                sdf.format(System.currentTimeMillis()) + " This is a delayed message",
+                                1000L * 60 * (i % 61));
+                        delayMsg.setTags(tagsArr[rand.nextInt(tagsArr.length)]);
+                        producer.send(delayMsg); // 或直接 producer.sendDelay(...)
 
                         TimeUnit.MILLISECONDS.sleep(1500);
                     } catch (Exception e) {

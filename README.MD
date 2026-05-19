@@ -1,6 +1,6 @@
-# mymq —— 轻量级消息中间件
+# minmq —— 轻量级消息中间件
 
-my-mq 是一个用 Java 编写的学习型消息中间件，受 QMQ 的设计启发，实现了其核心特性：
+min-mq 是一个用 Java 编写的学习型消息中间件，受 QMQ 的设计启发，实现了其核心特性：
 消息持久化、任意延时消息、长轮询和基于 Tag 的服务端过滤。项目使用 Netty 作为网络框架，
 以本地文件系统作为存储，无外部依赖，便于理解和二次开发。
 
@@ -15,12 +15,12 @@ Pull + 长轮询：消费者主动拉取，无消息时挂起连接，新消息�
 ## 📁 项目结构
 
 ```text
-my-mq/
+min-mq/
 ├── pom.xml                          # 父 POM，管理模块与依赖版本
-├── my-mq-common/                    # 公共模块：协议定义、消息编解码
-├── my-mq-broker/                    # 服务端：存储引擎、消费管理、延时调度
-├── my-mq-client/                    # 客户端：Producer、Consumer、MQClient
-└── my-mq-example/                   # 示例入口：Broker 启动类、客户端示例
+├── min-mq-common/                    # 公共模块：协议定义、消息编解码
+├── min-mq-broker/                    # 服务端：存储引擎、消费管理、延时调度
+├── min-mq-client/                    # 客户端：Producer、Consumer、MQClient
+└── min-mq-example/                   # 示例入口：Broker 启动类、客户端示例
 ```
 
 ## 🧱 系统架构
@@ -46,12 +46,12 @@ Broker (单进程)
 
 1. 构建项目
    ```bash
-   cd my-mq
+   cd min-mq
    mvn clean compile
    ```
 2. 启动 Broker
    ```bash
-   mvn -pl my-mq-example exec:java -Dexec.mainClass="com.mymq.example.ExampleBrokerMain"
+   mvn -pl min-mq-example exec:java -Dexec.mainClass="com.minmq.example.ExampleBrokerMain"
    ```
    控制台输出 Broker started on port 8080 表示启动成功。
 
@@ -59,7 +59,7 @@ Broker (单进程)
    打开另一个终端，执行：
 
 ```bash
-mvn -pl my-mq-example exec:java -Dexec.mainClass="com.mymq.example.ExampleClientMain"
+mvn -pl min-mq-example exec:java -Dexec.mainClass="com.minmq.example.ExampleClientMain"
 ```
 
 示例中会启动一个 Producer 持续发送消息，两个 Consumer（group-1、group-2）独立消费，同时演示 Tag 过滤和延时消息。

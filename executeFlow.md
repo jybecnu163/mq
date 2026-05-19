@@ -11,7 +11,7 @@ public void send(Message msg) throws InterruptedException {
 }
 ```
 
-这里 msg 是 com.mymq.common.protocol.Message，里面包含命令 SEND、主题、消息体、标签等信息。client.send(msg) 返回
+这里 msg 是 com.minmq.common.protocol.Message，里面包含命令 SEND、主题、消息体、标签等信息。client.send(msg) 返回
 CompletableFuture<Message>，调用 get() 会阻塞直到收到 Broker 的响应。
 
 MQClient.java

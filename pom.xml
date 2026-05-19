@@ -3,16 +3,16 @@
          xmlns="http://maven.apache.org/POM/4.0.0"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
-    <groupId>com.mymq</groupId>
-    <artifactId>my-mq</artifactId>
+    <groupId>com.minmq</groupId>
+    <artifactId>min-mq</artifactId>
     <version>1.0-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <modules>
-        <module>my-mq-common</module>
-        <module>my-mq-broker</module>
-        <module>my-mq-client</module>
-        <module>my-mq-example</module>
+        <module>min-mq-common</module>
+        <module>min-mq-broker</module>
+        <module>min-mq-client</module>
+        <module>min-mq-example</module>
     </modules>
 
     <properties>
@@ -50,8 +50,8 @@
                 <version>1.2.3</version>
             </dependency>
             <dependency>
-                <groupId>com.mymq</groupId>
-                <artifactId>my-mq-common</artifactId>
+                <groupId>com.minmq</groupId>
+                <artifactId>min-mq-common</artifactId>
                 <version>${project.version}</version>
             </dependency>
         </dependencies>

@@ -3,7 +3,7 @@ version: '3.8'
 services:
   broker:
     build:
-      context: ./my-mq-broker # 构建上下文路径，即 Dockerfile 所在目录
+      context: ./min-mq-broker # 构建上下文路径，即 Dockerfile 所在目录
       dockerfile: Dockerfile  # 指定 Dockerfile 文件名（默认就是 Dockerfile，可省略）
     ports:
       - "8080:8080"     # MQ 端口

@@ -23,6 +23,7 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
     private final ConcurrentMap<String, List<PendingPull>> pendingPulls = new ConcurrentHashMap<>();
     // 定时任务调度器，用于超时控制
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+    private static final int MAX_RETRY_COUNT = 3;   // 最大重试次数，可配置
 
     public MessageHandler(BrokerStore store) {
         this.store = store;
@@ -207,17 +208,47 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                     return;
                 }
 
+                long consumerOffset = indexMgr.getConsumerOffset();
+                int attempts = indexMgr.getAttempts(consumerOffset);
+
+                // --- 核心：死信检查 ---
+                if (attempts >= MAX_RETRY_COUNT) {
+                    // 已达最大重试次数，转入死信队列
+                    MessageLog.MessageEntry entry = store.readMessageData(physicalOffset);
+                    String dlqTopic = "DLQ-" + topic;
+
+                    // 将消息写入死信主题（保留原 tags）
+                    store.appendMessage(dlqTopic, entry.getBody(), entry.getTags());
+
+                    // 自动 ACK 跳过该消息
+                    indexMgr.commitOffset(consumerOffset);
+                    indexMgr.clearDeliveryAttempt();
+
+                    // 死信计数 +1
+                    store.getMeterRegistry().counter("mq_dead_letter_total",
+                            "originalTopic", topic, "group", group).increment();
+                    log.info("Message moved to DLQ [{}]: body={}", dlqTopic, entry.getBody());
+
+                    // 继续尝试拉取下一条消息
+                    continue;
+                }
+
                 // 读取完整消息（含 tags）
                 MessageLog.MessageEntry entry = store.readMessageData(physicalOffset);
                 String messageTags = entry.getTags();
 
                 // 检查 Tag 是否匹配
                 if (matchTag(messageTags, subscribeTag)) {
-                    // 匹配，返回给消费者
-                    Message resp = new Message(Command.RESPONSE, topic, entry.getBody());
+                    // 匹配，正常投递 返回给消费者
+                    String body = store.readMessage(physicalOffset);
+                    // 记录本次投递
+                    indexMgr.recordDelivery(consumerOffset);
+
+                    Message resp = new Message(Command.RESPONSE, topic, body);
                     resp.setRequestId(msg.getRequestId());
-                    resp.setPullOffset(indexMgr.getConsumerOffset());
+                    resp.setPullOffset(consumerOffset);
                     ctx.writeAndFlush(resp);
+                    // 成功投递一条，结束本次拉取
                     return;
                 } else {
                     // 不匹配，自动跳过（ACK 推进偏移）
@@ -226,7 +257,11 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                 }
             }
         } catch (Exception e) {
-            throw new RuntimeException(e);
+            log.error("Error in handlePull", e);
+            // 即使出错也返回错误
+            Message error = new Message(Command.RESPONSE, msg.getTopic(), "PULL_ERROR");
+            error.setRequestId(msg.getRequestId());
+            ctx.writeAndFlush(error);
         }
     }
 
@@ -255,6 +290,8 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
             ConsumeIndexManager indexMgr = store.getOrCreateIndex(topic, group);
             if (indexMgr != null) {
                 indexMgr.commitOffset(offset);
+                indexMgr.clearDeliveryAttempt();   // ACK 成功，清除重试记录
+                log.debug("ACK: topic={}, group={}, offset={}", topic, group, offset);
             }
 
             // 回复确认，防止客户端阻塞
@@ -262,7 +299,7 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
             resp.setRequestId(msg.getRequestId());
             ctx.writeAndFlush(resp);
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Error in handleAck", e);
             // 即使出错也返回错误
             Message error = new Message(Command.RESPONSE, msg.getTopic(), "ACK_ERROR");
             error.setRequestId(msg.getRequestId());

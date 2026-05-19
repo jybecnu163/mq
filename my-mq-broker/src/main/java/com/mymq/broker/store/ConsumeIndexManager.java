@@ -1,5 +1,8 @@
 package com.mymq.broker.store;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.File;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
@@ -14,13 +17,16 @@ import java.util.List;
  * 每个实例对应一个 topic + consumerGroup
  */
 public class ConsumeIndexManager {
+    private static final Logger log = LoggerFactory.getLogger(ConsumeIndexManager.class);
     private final FileChannel indexChannel;    // 存储物理偏移量，每 8 字节一条
     private final FileChannel progressChannel; // 存储当前消费进度（下一个要消费的索引位置）
     private long consumerOffset;               // 下一个待消费的索引序号
     private long indexCount;                   // 索引文件已有的记录数
     // 新增：时间索引（内存），用于按时间查找
     private final List<TimeOffsetEntry> timeIndex = new ArrayList<>();
-
+    // 新增：重试计数相关
+    private long lastDeliveredOffset = -1;       // 最后投递但未 ACK 的 consumerOffset
+    private int attemptsForCurrent = 0;          // 该 offset 的投递次数
 
     public ConsumeIndexManager(String dataDir, String topic, String group) throws Exception {
         String prefix = dataDir + "/" + topic + "-" + group;
@@ -135,7 +141,38 @@ public class ConsumeIndexManager {
         buf.flip();
         progressChannel.write(buf, 0);
     }
-    
+
+    /**
+     * 投递消息时记录，自动处理计数递增（连续未ACK则累加）
+     */
+    public synchronized void recordDelivery(long offset) {
+        if (offset == lastDeliveredOffset) {
+            attemptsForCurrent++;
+            log.debug("Retry #{} for offset {}", attemptsForCurrent, offset);
+        } else {
+            lastDeliveredOffset = offset;
+            attemptsForCurrent = 1;
+        }
+    }
+
+    /**
+     * 获取指定 offset 的当前投递次数（若 offset 不是当前等待 ACK 的消息，返回 0）
+     */
+    public synchronized int getAttempts(long offset) {
+        if (offset == lastDeliveredOffset) {
+            return attemptsForCurrent;
+        }
+        return 0;
+    }
+
+    /**
+     * ACK 成功后清除当前投递计数
+     */
+    public synchronized void clearDeliveryAttempt() {
+        lastDeliveredOffset = -1;
+        attemptsForCurrent = 0;
+    }
+
     // === 内部辅助类 ===
     private static class TimeOffsetEntry {
         final long timestamp;

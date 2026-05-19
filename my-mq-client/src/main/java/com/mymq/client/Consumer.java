@@ -5,6 +5,8 @@ import com.mymq.common.protocol.Message;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.ExecutionException;
 
 public class Consumer {
@@ -13,9 +15,15 @@ public class Consumer {
     private final MQClient client;
     private final String topic;
     private final String group;
+    /**
+     * lastPullOffset 是 Consumer 实例的成员变量，而每个 Consumer 对象对应一个特定的 topic + group 组合。因此不同 topic 或不同 group 的消费者拥有不同的 lastPullOffset，天然隔离，不会相互影响。无需全局处理。
+     */
     private long lastPullOffset = -1;   // 记录最后拉取消息的偏移，用于 ACK
     private String subscribeTag;  // 新增订阅标签
     private long startTime = 0;   // 毫秒时间戳，0 表示从最早开始
+    // 默认每次拉取1条
+    private int maxMessages = 1;
+
 
     public Consumer(MQClient client, String topic, String group) {
         this(client, topic, group, null); // 默认不过滤
@@ -26,6 +34,36 @@ public class Consumer {
         this.topic = topic;
         this.group = group;
         this.subscribeTag = subscribeTag;
+    }
+
+    /**
+     * 拉取消息，可能返回多条
+     *
+     * @return 消息列表（可能为空）
+     */
+    public List<Message.MessagePayload> pullBatch() throws InterruptedException {
+        Message request = new Message(Command.PULL, topic, "");
+        request.setGroup(group);
+        request.setSubscribeTag(subscribeTag);
+        request.setStartTime(startTime);
+        request.setMaxMessages(maxMessages);     // 传递上限
+        try {
+            Message response = client.send(request).get();
+            if (response.getCommand() == Command.RESPONSE && response.getMessages() != null) {
+                lastPullOffset = response.getPullOffset();   // 记录最后一条的偏移量，用于 ACK
+                return response.getMessages();               // 批量消息列表
+            }
+            return Collections.emptyList();
+        } catch (ExecutionException e) {
+            throw new RuntimeException("Pull failed", e.getCause());
+        }
+    }
+
+    /**
+     * 确认本次批量拉取的所有消息（提交最后一条的偏移量）
+     */
+    public void ackLast() throws ExecutionException, InterruptedException {
+        ack();   // 无参 ack() 内部使用 lastPullOffset 发送确认
     }
 
     /**
@@ -59,6 +97,7 @@ public class Consumer {
         }
 
         // 记录服务端返回的逻辑偏移量，用于后续 ACK
+        assert response != null;
         lastPullOffset = response.getPullOffset();
 
         // 构造一条纯业务消息返回给调用方
@@ -96,5 +135,9 @@ public class Consumer {
 
     public void setStartTime(long startTime) {
         this.startTime = startTime;
+    }
+
+    public void setMaxMessages(int max) {
+        this.maxMessages = max;
     }
 }

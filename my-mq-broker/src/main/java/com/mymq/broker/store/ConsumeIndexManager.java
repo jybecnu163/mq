@@ -7,10 +7,7 @@ import java.io.File;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.List;
+import java.util.*;
 
 /**
  * 消费者索引与进度管理，类似 QMQ 的 pull log 简化版
@@ -25,8 +22,10 @@ public class ConsumeIndexManager {
     // 新增：时间索引（内存），用于按时间查找
     private final List<TimeOffsetEntry> timeIndex = new ArrayList<>();
     // 新增：重试计数相关
-    private long lastDeliveredOffset = -1;       // 最后投递但未 ACK 的 consumerOffset
-    private int attemptsForCurrent = 0;          // 该 offset 的投递次数
+//    private long lastDeliveredOffset = -1;       // 最后投递但未 ACK 的 consumerOffset
+//    private int attemptsForCurrent = 0;          // 该 offset 的投递次数
+    // 替换原有的 lastDeliveredOffset / attemptsForCurrent 为 Map
+    private final Map<Long, Integer> deliveryAttempts = new HashMap<>();
 
     public ConsumeIndexManager(String dataDir, String topic, String group) throws Exception {
         String prefix = dataDir + "/" + topic + "-" + group;
@@ -111,22 +110,6 @@ public class ConsumeIndexManager {
         return consumerOffset;
     }
 
-    /**
-     * 推进消费进度（ACK 确认）
-     *
-     * @param offset 客户端 ACK 的偏移量，只有当它等于当前 consumerOffset 时才推进
-     */
-    public synchronized void commitOffset(long offset) throws Exception {
-        if (offset == consumerOffset) {
-            consumerOffset++;
-            // 持久化新进度
-            ByteBuffer buf = ByteBuffer.allocate(8);
-            buf.putLong(consumerOffset);
-            buf.flip();
-            progressChannel.write(buf, 0);
-        }
-        // 非顺序 ACK 直接忽略，保证顺序消费
-    }
 
     public void close() throws Exception {
         indexChannel.close();
@@ -146,31 +129,48 @@ public class ConsumeIndexManager {
      * 投递消息时记录，自动处理计数递增（连续未ACK则累加）
      */
     public synchronized void recordDelivery(long offset) {
-        if (offset == lastDeliveredOffset) {
-            attemptsForCurrent++;
-            log.debug("Retry #{} for offset {}", attemptsForCurrent, offset);
-        } else {
-            lastDeliveredOffset = offset;
-            attemptsForCurrent = 1;
-        }
+        deliveryAttempts.merge(consumerOffset, 1, Integer::sum);
+    }
+
+
+    public synchronized int getAttempts(long consumerOffset) {
+        return deliveryAttempts.getOrDefault(consumerOffset, 0);
     }
 
     /**
-     * 获取指定 offset 的当前投递次数（若 offset 不是当前等待 ACK 的消息，返回 0）
+     * 临时推进消费偏移量（不持久化），并返回推进前的偏移量
      */
-    public synchronized int getAttempts(long offset) {
-        if (offset == lastDeliveredOffset) {
-            return attemptsForCurrent;
+    public synchronized long advanceOffset() {
+        long old = consumerOffset;
+        if (consumerOffset < indexCount) {
+            consumerOffset++;
         }
-        return 0;
+        return old;
     }
 
     /**
-     * ACK 成功后清除当前投递计数
+     * 推进消费进度（ACK 确认）
+     *
+     * @param offset 客户端 ACK 的偏移量，只有当它等于当前 consumerOffset 时才推进
      */
-    public synchronized void clearDeliveryAttempt() {
-        lastDeliveredOffset = -1;
-        attemptsForCurrent = 0;
+    public synchronized void commitOffset(long offset) throws Exception {
+        if (offset == consumerOffset) {
+            consumerOffset++;
+            // 持久化新进度
+            ByteBuffer buf = ByteBuffer.allocate(8);
+            buf.putLong(consumerOffset);
+            buf.flip();
+            progressChannel.write(buf, 0);
+            // 移除已确认偏移量的投递计数
+            deliveryAttempts.remove(offset);
+            // 如果之前有连续的旧计数，也可以一并移除（此处仅移除当前确认的）
+        }
+    }
+
+    // 兼容旧调用：提供不带参数的 clearDeliveryAttempt，移除所有计数（不推荐）
+    public synchronized void clearAllAttempts() {
+        // 一次性清除所有投递计数
+        deliveryAttempts.clear();
     }
 
     // === 内部辅助类 ===

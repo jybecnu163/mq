@@ -10,10 +10,9 @@ import io.netty.channel.SimpleChannelInboundHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.*;
+import java.util.stream.Collectors;
 
 public class MessageHandler extends SimpleChannelInboundHandler<Message> {
     private static final Logger log = LoggerFactory.getLogger(MessageHandler.class);
@@ -82,37 +81,83 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
         String topic = msg.getTopic();
         String body = msg.getBody();
         String tags = msg.getTags();  // 获取 tags
+        List<Message.MessagePayload> payloads = msg.getPayloads();
+
         try {
-            long offset = store.appendMessage(topic, body, tags);
+            if (payloads != null && !payloads.isEmpty()) {
+                // ---- 批量发送 ----
+                List<Long> offsets = new ArrayList<>(payloads.size());
+                Set<String> affectedTopics = new HashSet<>();   // 实际写入过的 topic 集合
+                for (Message.MessagePayload p : payloads) {
+                    // 决定本条消息的实际 topic：优先使用 payload 中的，为空则用总 topic
+                    String effectiveTopic = (p.getTopic() == null || p.getTopic().isEmpty())
+                            ? topic : p.getTopic();
 
-            log.info("Message stored: topic={}, offset={}, body={}", topic, offset, body);
+                    // 写入消息日志，返回物理偏移量
+                    long offset = store.appendMessage(effectiveTopic, p.getBody(), p.getTags());
+                    offsets.add(offset);
+                    affectedTopics.add(effectiveTopic);
 
-            // 遍历所有已注册组，自动追加索引   // 追加索引到所有组（同前）
-            for (Map.Entry<String, ConsumeIndexManager> entry : store.getAllGroupIndexes().entrySet()) {
-                if (entry.getKey().startsWith(topic + "-")) {
-//                    String group = entry.getKey().substring(topic.length() + 1);
-                    entry.getValue().appendOffset(offset, System.currentTimeMillis());
-//                    System.out.println("Index appended: topic=" + topic + ", group=" + group + ", offset=" + offset);
+                    // 为所有订阅了 effectiveTopic 的消费者组追加索引
+                    for (Map.Entry<String, ConsumeIndexManager> entry : store.getAllGroupIndexes().entrySet()) {
+                        if (entry.getKey().startsWith(effectiveTopic + "-")) {
+                            entry.getValue().appendOffset(offset, System.currentTimeMillis());
+                        }
+                    }
                 }
+
+                // 唤醒所有受影响 topic 的长轮询消费者
+                for (String tp : affectedTopics) {
+                    wakeupPendingPulls(tp);
+                }
+
+                // 将偏移量列表编码返回
+                String offsetsStr = offsets.stream().map(String::valueOf)
+                        .collect(Collectors.joining(","));
+                Message ack = new Message(Command.RESPONSE, topic, "OK");
+                ack.setRequestId(msg.getRequestId());
+                ack.getHeaders().put("offsets", offsetsStr);
+                ctx.writeAndFlush(ack);
+            } else {
+                // ---- 单条发送（原有逻辑） ----
+                long offset = store.appendMessage(topic, body, tags);
+
+                log.info("Message stored: topic={}, offset={}, body={}", topic, offset, body);
+
+                appendIndexForAllGroups(topic, offset);
+
+                // 唤醒该 topic 下所有挂起的拉取请求
+                wakeupPendingPulls(topic);
+
+                // 回复生产者
+                Message ack = new Message(Command.RESPONSE, topic, "OK");
+                ack.setRequestId(msg.getRequestId());
+                ctx.writeAndFlush(ack);
             }
-
-            // 唤醒该 topic 下所有挂起的拉取请求
-            wakeupPendingPulls(topic);
-
-            // 回复生产者
-            Message ack = new Message(Command.RESPONSE, topic, "OK");
-            ack.setRequestId(msg.getRequestId());
-            ctx.writeAndFlush(ack);
         } catch (Exception e) {
-            e.printStackTrace();
-            Message error = new Message(Command.RESPONSE, msg.getTopic(), "ERROR");
+            Message error = new Message(Command.RESPONSE, msg.getTopic(), "ERROR_SEND");
             error.setRequestId(msg.getRequestId());
             ctx.writeAndFlush(error);
         }
-        // 动态增加带 topic 标签的计数器
-        store.getMeterRegistry().counter("mq_messages_produced_total",
-                "topic", topic).increment();
-        store.getProducedThisMinute().incrementAndGet();
+
+        for (int i = 0; i < (payloads != null && !payloads.isEmpty()
+                ? payloads.size() : 1); i++) {
+            // 动态增加带 topic 标签的计数器
+            store.getMeterRegistry().counter("mq_messages_produced_total",
+                    "topic", topic).increment();
+            store.getProducedThisMinute().incrementAndGet();
+        }
+    }
+
+    // 提取公共索引追加
+    private void appendIndexForAllGroups(String topic, long offset) throws Exception {
+        // 遍历所有已注册组，自动追加索引   // 追加索引到所有组（同前）
+        for (Map.Entry<String, ConsumeIndexManager> entry : store.getAllGroupIndexes().entrySet()) {
+            if (entry.getKey().startsWith(topic + "-")) {
+                entry.getValue()
+                        .appendOffset(offset, System.currentTimeMillis());
+            }
+        }
     }
 
     /**
@@ -166,8 +211,8 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
         try {
             String topic = msg.getTopic();
             String group = msg.getGroup() != null ? msg.getGroup() : "default";
-
             String subscribeTag = msg.getSubscribeTag(); // 消费者订阅的 tag
+            int maxMessages = Math.max(1, msg.getMaxMessages()); // 至少拉取 1 条
 
             // 获取或创建消费者组索引（注册动作内置于 getOrCreateIndex）
             ConsumeIndexManager indexMgr = store.getOrCreateIndex(topic, group);
@@ -180,14 +225,20 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                 }
             }
 
-            log.info("Group active: topic={}, group={}", topic, group);
+//            log.info("Group active: topic={}, group={}", topic, group);
+
+            List<Message.MessagePayload> collected = new ArrayList<>();
+            long lastAckOffset = -1; // 用于客户端确认的最后一条偏移量
             // 循环查找匹配的消息
-            while (true) {
+            while (collected.size() < maxMessages) {
                 long physicalOffset = indexMgr.peekNextOffset();
 
                 if (physicalOffset < 0) {
-                    // 无消息可消费，挂起长轮询  ... 挂起逻辑不变 ...
-
+                    // 无消息：若已有收集，立即返回；否则挂起
+                    if (!collected.isEmpty()) {
+                        sendBatchResponse(ctx, msg, collected, lastAckOffset);
+                        return;
+                    }
                     // 无消息，挂起等待，并设置超时
                     PendingPull pending = new PendingPull(ctx, msg.getRequestId(), group, topic);
                     // 将请求加入该 topic 的挂起列表
@@ -221,8 +272,8 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                     store.appendMessage(dlqTopic, entry.getBody(), entry.getTags());
 
                     // 自动 ACK 跳过该消息
-                    indexMgr.commitOffset(consumerOffset);
-                    indexMgr.clearDeliveryAttempt();
+                    indexMgr.commitOffset(consumerOffset); // 内部已清理投递计数
+                    // indexMgr.clearDeliveryAttempt(); // 移除该行
 
                     // 死信计数 +1
                     store.getMeterRegistry().counter("mq_dead_letter_total",
@@ -235,26 +286,30 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
 
                 // 读取完整消息（含 tags）
                 MessageLog.MessageEntry entry = store.readMessageData(physicalOffset);
-                String messageTags = entry.getTags();
-
-                // 检查 Tag 是否匹配
-                if (matchTag(messageTags, subscribeTag)) {
-                    // 匹配，正常投递 返回给消费者
-                    String body = store.readMessage(physicalOffset);
-                    // 记录本次投递
-                    indexMgr.recordDelivery(consumerOffset);
-
-                    Message resp = new Message(Command.RESPONSE, topic, body);
-                    resp.setRequestId(msg.getRequestId());
-                    resp.setPullOffset(consumerOffset);
-                    ctx.writeAndFlush(resp);
-                    // 成功投递一条，结束本次拉取
-                    return;
-                } else {
-                    // 不匹配，自动跳过（ACK 推进偏移）
-                    indexMgr.commitOffset(indexMgr.getConsumerOffset());
-                    // 继续循环，尝试下一条消息
+                if (!matchTag(entry.getTags(), subscribeTag)) {
+                    indexMgr.commitOffset(consumerOffset); // 跳过不匹配的消息
+                    continue;
                 }
+
+                // 匹配成功：收集消息
+                collected.add(new Message.MessagePayload(topic, entry.getBody(), entry.getTags()));
+                lastAckOffset = consumerOffset; // 记录此条偏移量用于 ACK
+                indexMgr.recordDelivery(consumerOffset); // 记录投递次数
+                indexMgr.advanceOffset(); // 临时推进偏移，以便获取下一条
+            }
+
+            // 位于 handlePull 方法末尾，替换原来的 sendBatchResponse 调用
+            if (collected.size() == 1 && maxMessages == 1) {
+                // 单条拉取兼容：填充 body
+                Message.MessagePayload payload = collected.get(0);
+                Message resp = new Message(Command.RESPONSE, topic, payload.getBody());
+                resp.setRequestId(msg.getRequestId());
+                resp.setPullOffset(lastAckOffset);
+                ctx.writeAndFlush(resp);
+            } else {
+                // 批量拉取
+                // 达到批量上限，立即返回
+                sendBatchResponse(ctx, msg, collected, lastAckOffset);
             }
         } catch (Exception e) {
             log.error("Error in handlePull", e);
@@ -263,6 +318,18 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
             error.setRequestId(msg.getRequestId());
             ctx.writeAndFlush(error);
         }
+    }
+
+    /**
+     * 发送批量拉取响应
+     */
+    private void sendBatchResponse(ChannelHandlerContext ctx, Message request,
+                                   List<Message.MessagePayload> messages, long ackOffset) {
+        Message resp = new Message(Command.RESPONSE, request.getTopic(), null);
+        resp.setRequestId(request.getRequestId());
+        resp.setMessages(messages);
+        resp.setPullOffset(ackOffset);   // 客户端 ACK 时需使用此偏移量
+        ctx.writeAndFlush(resp);
     }
 
     // Tag 匹配逻辑：支持 '*' 或 null 匹配所有，否则检查逗号分隔列表中是否包含订阅标签
@@ -289,8 +356,9 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
         try {
             ConsumeIndexManager indexMgr = store.getOrCreateIndex(topic, group);
             if (indexMgr != null) {
-                indexMgr.commitOffset(offset);
-                indexMgr.clearDeliveryAttempt();   // ACK 成功，清除重试记录
+                indexMgr.commitOffset(offset);// 内部已清理投递计数
+                // 移除该行// ACK 成功，清除重试记录
+                // indexMgr.clearDeliveryAttempt();
                 log.debug("ACK: topic={}, group={}, offset={}", topic, group, offset);
             }
 

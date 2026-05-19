@@ -1,6 +1,7 @@
 package com.mymq.common.protocol;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -22,6 +23,12 @@ public class Message {
     // 新增：消费者订阅的标签（消费者拉取时使用）
     private String subscribeTag;
     private long startTime = 0;   // 起始消费时间（毫秒时间戳），0 表示从最早开始
+
+    // 批量发送相关
+    private List<MessagePayload> payloads;   // 批量发送时使用
+    // 批量拉取相关
+    private int maxMessages = 1;             // 消费者最大拉取条数
+    private List<MessagePayload> messages;   // 服务端返回的批量消息
 
     public Message() {
     }
@@ -126,5 +133,102 @@ public class Message {
 
     public void setStartTime(long startTime) {
         this.startTime = startTime;
+    }
+
+    public void setCommand(String command) {
+        this.command = command;
+    }
+
+    public List<MessagePayload> getPayloads() {
+        return payloads;
+    }
+
+    public void setPayloads(List<MessagePayload> payloads) {
+        this.payloads = payloads;
+    }
+
+    public int getMaxMessages() {
+        return maxMessages;
+    }
+
+    public void setMaxMessages(int maxMessages) {
+        this.maxMessages = maxMessages;
+    }
+
+    public List<MessagePayload> getMessages() {
+        return messages;
+    }
+
+    public void setMessages(List<MessagePayload> messages) {
+        this.messages = messages;
+    }
+
+    // 内部类：单条消息负载
+    public static class MessagePayload {
+        private String topic;
+        private String body;
+        private String tags;
+
+        public MessagePayload() {
+        }
+
+        public MessagePayload(String topic, String body, String tags) {
+            this.topic = topic;
+            this.body = body;
+            this.tags = tags;
+        }
+
+        public String getTopic() {
+            return topic;
+        }
+
+        public void setTopic(String topic) {
+            this.topic = topic;
+        }
+
+        public String getBody() {
+            return body;
+        }
+
+        public void setBody(String body) {
+            this.body = body;
+        }
+
+        public String getTags() {
+            return tags;
+        }
+
+        public void setTags(String tags) {
+            this.tags = tags;
+        }
+
+        @Override
+        public String toString() {
+            return "MessagePayload{" +
+                    "topic='" + topic + '\'' +
+                    ", body='" + body + '\'' +
+                    ", tags='" + tags + '\'' +
+                    '}';
+        }
+    }
+
+    @Override
+    public String toString() {
+        return "Message{" +
+                "command='" + command + '\'' +
+                ", requestId='" + requestId + '\'' +
+                ", topic='" + topic + '\'' +
+                ", body='" + body + '\'' +
+                ", group='" + group + '\'' +
+                ", pullOffset=" + pullOffset +
+                ", headers=" + headers +
+                ", delayMs=" + delayMs +
+                ", tags='" + tags + '\'' +
+                ", subscribeTag='" + subscribeTag + '\'' +
+                ", startTime=" + startTime +
+                ", payloads=" + payloads +
+                ", maxMessages=" + maxMessages +
+                ", messages=" + messages +
+                '}';
     }
 }

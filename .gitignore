@@ -1,6 +1,7 @@
 .idea
 */target
 data/
+*.docx
 
 
 !**/src/main/**/target/

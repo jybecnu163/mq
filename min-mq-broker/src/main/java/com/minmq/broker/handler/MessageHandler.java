@@ -6,7 +6,6 @@ import com.minmq.broker.store.BrokerStore;
 import com.minmq.broker.store.ConsumeIndexManager;
 import com.minmq.broker.store.MessageLog;
 import com.minmq.common.protocol.AckMode;
-import com.minmq.common.protocol.BodyCodec;
 import com.minmq.common.protocol.Command;
 import com.minmq.common.protocol.Message;
 import io.netty.channel.ChannelHandlerContext;
@@ -87,11 +86,7 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
 
     private void handleSend(ChannelHandlerContext ctx, Message msg) {
         String topic = msg.getTopic();
-        byte[] body = msg.getBody();
-        String tags = msg.getTags();  // 获取 tags
         List<Message.MessagePayload> payloads = msg.getPayloads();
-
-        BodyCodec bodyCodec = msg.getBodyCodec();
 
         try {
             if (payloads != null && !payloads.isEmpty()) {
@@ -131,10 +126,10 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                 ctx.writeAndFlush(ack);
             } else {
                 // ---- 单条发送（原有逻辑） ----
-                long offset = store.appendMessage(topic, body, tags, bodyCodec);
+                long offset = store.appendMessage(topic, msg.getBody(), msg.getTags(), msg.getBodyCodec());
 
                 log.info("Message stored: topic={}, offset={}, body={}", topic, offset,
-                        new String(body, StandardCharsets.UTF_8));
+                        new String(msg.getBody(), StandardCharsets.UTF_8));
 
                 appendIndexForAllGroups(topic, offset);
 

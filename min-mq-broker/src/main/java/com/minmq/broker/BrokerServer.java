@@ -1,9 +1,12 @@
 package com.minmq.broker;
 
+import com.minmq.broker.config.BrokerConfig;
 import com.minmq.broker.handler.MessageHandler;
+import com.minmq.broker.meta.InMemoryMetaStore;
 import com.minmq.broker.metrics.MetricsServer;
 import com.minmq.broker.store.BrokerStore;
 import com.minmq.common.protocol.MessageCodec;
+import com.minmq.common.protocol.MetaStore;
 import io.micrometer.prometheus.PrometheusConfig;
 import io.micrometer.prometheus.PrometheusMeterRegistry;
 import io.netty.bootstrap.ServerBootstrap;
@@ -23,8 +26,10 @@ import java.util.concurrent.TimeUnit;
 
 public class BrokerServer {
     private static final Logger log = LoggerFactory.getLogger(BrokerServer.class);
+    private final MetaStore metaStore;
     private final int port;
     private final BrokerStore store;
+    private final String dataDir;
 
     private final int metricsPort;
     private final PrometheusMeterRegistry meterRegistry;
@@ -35,10 +40,12 @@ public class BrokerServer {
     public BrokerServer(int port, int metricsPort, String dataDir) throws Exception {
         this.port = port;
         this.metricsPort = metricsPort;
+        this.dataDir = dataDir;
         // 初始化 Prometheus 注册表
         this.meterRegistry = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
         // 传入注册表，供业务埋点使用
         this.store = new BrokerStore(dataDir, meterRegistry);
+        this.metaStore = new InMemoryMetaStore();
     }
 
     public void start() throws InterruptedException {
@@ -112,13 +119,13 @@ public class BrokerServer {
     }
 
     public static void main(String[] args) throws Exception {
-        int port = Integer.parseInt(System.getenv()
-                .getOrDefault("MQ_PORT", "8080"));
-        int metricsPort = Integer.parseInt(System.getenv()
-                .getOrDefault("METRICS_PORT", "8081"));
-        String dataDir = System.getenv()
-                .getOrDefault("MQ_DATA_DIR", "./data");
-
+        BrokerConfig config = BrokerConfig.load();
+        int port = Integer.parseInt(System.getenv().getOrDefault("MQ_PORT",
+                String.valueOf(config.getBroker().getPort())));
+        int metricsPort = Integer.parseInt(System.getenv().getOrDefault("METRICS_PORT",
+                String.valueOf(config.getBroker().getMetricsPort())));
+        String dataDir = System.getenv().getOrDefault("MQ_DATA_DIR",
+                config.getBroker().getDataDir());
         new BrokerServer(port, metricsPort, dataDir).start();
     }
 }

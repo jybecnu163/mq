@@ -1,0 +1,9 @@
+# Broker 配置
+broker:
+  port: 8080          # MQ 通信端口
+  metricsPort: 8081   # 监控/管理端口
+  dataDir: ./data     # 数据存储根目录
+
+# 日志配置（可选，由 logback.xml 控制，此处可留空）
+logging:
+  level: INFO

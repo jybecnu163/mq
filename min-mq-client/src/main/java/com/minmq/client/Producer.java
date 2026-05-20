@@ -28,10 +28,17 @@ public class Producer {
      */
     public List<Long> sendBatch(String defaultTopic, List<Message.MessagePayload> payloads)
             throws ExecutionException, InterruptedException {
+        if (null == payloads || payloads.isEmpty()) return Collections.emptyList();
+        payloads.forEach(k -> {
+            if (null == k.getBody() || k.getBody().length == 0) {
+                throw new RuntimeException("Batch send body is null or empty");
+            }
+        });
         Message msg = new Message(Command.SEND, defaultTopic, null);
         msg.setPayloads(payloads);   // 使用批量字段
         Message response = client.send(msg).get();
-        if (response.getCommand() == Command.RESPONSE && "OK".equals(response.getBody())) {
+        if (response.getCommand() == Command.RESPONSE
+                && "OK".equals(response.getInfo())) {
             // 偏移量列表通过 headers 返回（逗号分隔）
             String offsetsStr = response.getHeaders().get("offsets");
             if (offsetsStr != null) {
@@ -41,7 +48,8 @@ public class Producer {
             }
             return Collections.emptyList();
         } else {
-            throw new RuntimeException("Batch send failed: " + response.getBody());
+            throw new RuntimeException("Batch send failed: "
+                    + response.getInfo());
         }
     }
 
@@ -56,8 +64,8 @@ public class Producer {
                     log.debug("Producer: message sent successfully");
                     return response;
                 } else {
-                    log.warn("Producer: send failed with response {}", response.getBody());
-                    throw new RuntimeException("Send failed: " + Arrays.toString(response.getBody()));
+                    log.warn("Producer: send failed with response {}", response.getInfo());
+                    throw new RuntimeException("Send failed: " + response.getInfo());
                 }
             } catch (ExecutionException e) {
                 Throwable cause = e.getCause();

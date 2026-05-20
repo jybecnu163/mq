@@ -31,6 +31,7 @@ public class Message {
     private List<MessagePayload> messages;
     private List<MessagePayload> payloads;
 
+    // response返回的信息字段
     private String info;
 
     // 构造方法

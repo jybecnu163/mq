@@ -2,7 +2,7 @@
 */target
 data/
 *.docx
-
+toClusters.md
 
 !**/src/main/**/target/
 !**/src/test/**/target/

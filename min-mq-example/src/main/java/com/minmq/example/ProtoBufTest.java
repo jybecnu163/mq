@@ -4,6 +4,7 @@ import com.google.protobuf.InvalidProtocolBufferException;
 import com.minmq.client.Consumer;
 import com.minmq.client.MQClient;
 import com.minmq.client.Producer;
+import com.minmq.common.protocol.AckMode;
 import com.minmq.common.protocol.Command;
 import com.minmq.common.protocol.Message;
 import com.mymq.example.proto.OrderOuterClass;
@@ -20,6 +21,7 @@ public class ProtoBufTest {
             consClient.connect();
             Consumer consumer = new Consumer(consClient, "order_topic", "group_1", "*");
             System.out.println(consumer.pull());
+            consumer.setAckMode(AckMode.MANUAL);
 
 //            TimeUnit.SECONDS.sleep(3);
 

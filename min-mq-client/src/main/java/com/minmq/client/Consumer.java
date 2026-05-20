@@ -1,5 +1,6 @@
 package com.minmq.client;
 
+import com.minmq.common.protocol.AckMode;
 import com.minmq.common.protocol.Command;
 import com.minmq.common.protocol.Message;
 import org.slf4j.Logger;
@@ -23,7 +24,8 @@ public class Consumer {
     private long startTime = 0;   // 毫秒时间戳，0 表示从最早开始
     // 默认每次拉取1条
     private int maxMessages = 1;
-
+    // 新增：确认模式，默认手动
+    private AckMode ackMode = AckMode.MANUAL;
 
     public Consumer(MQClient client, String topic, String group) {
         this(client, topic, group, null); // 默认不过滤
@@ -51,22 +53,24 @@ public class Consumer {
         request.setStartTime(startTime);
         request.setMaxMessages(maxMessages);     // 传递上限
         try {
+            // 将确认模式告知服务端（服务器即时确认模式需要）
+            if (ackMode == AckMode.SERVER_IMMEDIATE) {
+                request.getHeaders().put("X-Ack-Mode", String.valueOf(ackMode.getValue()));
+            }
+
             Message response = client.send(request).get();
             if (response.getCommand() == Command.RESPONSE && response.getMessages() != null) {
                 lastPullOffset = response.getPullOffset();   // 记录最后一条的偏移量，用于 ACK
+                // 客户端自动确认模式
+                if (ackMode == AckMode.CLIENT_AUTO && lastPullOffset >= 0) {
+                    autoAck();
+                }
                 return response.getMessages();               // 批量消息列表
             }
             return Collections.emptyList();
         } catch (ExecutionException e) {
             throw new RuntimeException("Pull failed", e.getCause());
         }
-    }
-
-    /**
-     * 确认本次批量拉取的所有消息（提交最后一条的偏移量）
-     */
-    public void ackLast() throws ExecutionException, InterruptedException {
-        ack();   // 无参 ack() 内部使用 lastPullOffset 发送确认
     }
 
     /**
@@ -83,6 +87,11 @@ public class Consumer {
         final int maxRetries = 20;
         while (retries < maxRetries) {
             try {
+                // 将确认模式告知服务端（服务器即时确认模式需要）
+                if (ackMode == AckMode.SERVER_IMMEDIATE) {
+                    request.getHeaders().put("X-Ack-Mode", String.valueOf(ackMode.getValue()));
+                }
+
                 response = client.send(request).get();
                 retries = maxRetries + 999;
             } catch (ExecutionException e) {
@@ -119,20 +128,48 @@ public class Consumer {
         result.setPullOffset(lastPullOffset);
         result.setTags(response.getTags());  // 如果需要的话，也可以透传 tags
 
+        // 客户端自动确认模式
+        if (ackMode == AckMode.CLIENT_AUTO) {
+            autoAck();
+        }
+
         return result;
     }
 
+    private void autoAck() {
+        try {
+            ack();
+        } catch (Exception e) {
+            log.error("Auto ack failed", e);
+        }
+    }
+
     /**
-     * 确认消息已处理，推动消费进度
+     * 确认本次批量拉取的所有消息（提交最后一条的偏移量）
+     */
+    public void ackLast() throws ExecutionException, InterruptedException {
+        ack();   // 无参 ack() 内部使用 lastPullOffset 发送确认
+    }
+
+    /**
+     * 手动确认（如果启用了自动确认，该方法仍可安全调用，会忽略重复确认）
      */
     public void ack() throws ExecutionException, InterruptedException {
-        if (lastPullOffset < 0) return;
-
+        if (lastPullOffset < 0) {
+            log.debug("No valid offset to ack");
+            return;
+        }
+        // 服务器即时确认模式下无需发送ACK，因为服务端已经提交了
+        if (ackMode == AckMode.SERVER_IMMEDIATE) {
+            log.debug("Server immediate mode, skipping client ack");
+            lastPullOffset = -1; // 清空，防止重复调用
+            return;
+        }
         Message ackMsg = new Message(Command.ACK, topic, "");
         ackMsg.setGroup(group);
         ackMsg.setPullOffset(lastPullOffset);
-        client.send(ackMsg).get();               // ACK 不需要关心响应
-        lastPullOffset = -1;
+        client.send(ackMsg).get();
+        lastPullOffset = -1; // 确认后清空
     }
 
     public String getSubscribeTag() {
@@ -154,4 +191,9 @@ public class Consumer {
     public void setMaxMessages(int max) {
         this.maxMessages = max;
     }
+
+    public void setAckMode(AckMode ackMode) {
+        this.ackMode = ackMode;
+    }
+
 }

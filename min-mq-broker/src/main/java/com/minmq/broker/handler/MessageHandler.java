@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.minmq.broker.store.BrokerStore;
 import com.minmq.broker.store.ConsumeIndexManager;
 import com.minmq.broker.store.MessageLog;
+import com.minmq.common.protocol.AckMode;
 import com.minmq.common.protocol.Command;
 import com.minmq.common.protocol.Message;
 import io.netty.channel.ChannelHandlerContext;
@@ -223,6 +224,15 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
             String subscribeTag = msg.getSubscribeTag(); // 消费者订阅的 tag
             int maxMessages = Math.max(1, msg.getMaxMessages()); // 至少拉取 1 条
 
+            // 读取确认模式
+            String ackModeStr = msg.getHeaders().get("X-Ack-Mode");
+            AckMode ackMode = AckMode.MANUAL; // 默认手动
+            if (ackModeStr != null) {
+                try {
+                    ackMode = AckMode.fromValue(Integer.parseInt(ackModeStr));
+                } catch (Exception e) { /* ignore */ }
+            }
+
             // 获取或创建消费者组索引（注册动作内置于 getOrCreateIndex）
             ConsumeIndexManager indexMgr = store.getOrCreateIndex(topic, group);
             long startTime = msg.getStartTime();
@@ -269,36 +279,41 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                 }
 
                 long consumerOffset = indexMgr.getConsumerOffset();
-                int attempts = indexMgr.getAttempts(consumerOffset);
+                // 如果不是立即确认模式，进行死信检查
+                if (ackMode != AckMode.SERVER_IMMEDIATE) {
+                    int attempts = indexMgr.getAttempts(consumerOffset);
 
-                // --- 死信检查（增加二进制字段传递，防止死信丢失二进制负载） ---
-                if (attempts >= MAX_RETRY_COUNT) {
-                    // 已达最大重试次数，转入死信队列
-                    MessageLog.MessageEntry entry = store.readMessageData(physicalOffset);
-                    String dlqTopic = "DLQ-" + topic;
+                    // --- 死信检查（增加二进制字段传递，防止死信丢失二进制负载） ---
+                    if (attempts >= MAX_RETRY_COUNT) {
+                        // 已达最大重试次数，转入死信队列
+                        MessageLog.MessageEntry entry = store.readMessageData(physicalOffset);
+                        String dlqTopic = "DLQ-" + topic;
 
-                    // 【修改点】死信转移需同时传递 bodyBytes 和 bodyCodec
-                    store.appendMessage(dlqTopic, entry.getB(), entry.getT(),
-                            entry.bb, entry.bc);
+                        // 【修改点】死信转移需同时传递 bodyBytes 和 bodyCodec
+                        store.appendMessage(dlqTopic, entry.getB(), entry.getT(),
+                                entry.bb, entry.bc);
 
-                    // 自动 ACK 跳过该消息
-                    indexMgr.commitOffset(consumerOffset); // 内部已清理投递计数
-                    // indexMgr.clearDeliveryAttempt(); // 移除该行
+                        // 自动 ACK 跳过该消息
+                        indexMgr.commitOffset(consumerOffset); // 内部已清理投递计数
+                        // indexMgr.clearDeliveryAttempt(); // 移除该行
 
-                    // 死信计数 +1
-                    store.getMeterRegistry().counter("mq_dead_letter_total",
-                            "originalTopic", topic, "group", group).increment();
-                    log.info("Message moved to DLQ [{}]: body={}, codec={}",
-                            dlqTopic, entry.getB(), entry.bc);
+                        // 死信计数 +1
+                        store.getMeterRegistry().counter("mq_dead_letter_total",
+                                "originalTopic", topic, "group", group).increment();
+                        log.info("Message moved to DLQ [{}]: body={}, codec={}",
+                                dlqTopic, entry.getB(), entry.bc);
 
-                    // 继续尝试拉取下一条消息
-                    continue;
+                        // 继续尝试拉取下一条消息
+                        continue;
+                    }
                 }
 
                 // 读取完整消息（含 tags）
                 MessageLog.MessageEntry entry = store.readMessageData(physicalOffset);
                 if (!matchTag(entry.getT(), subscribeTag)) {
-                    indexMgr.commitOffset(consumerOffset); // 跳过不匹配的消息
+                    // 跳过不匹配消息，根据模式决定是否提交偏移？
+                    // 如果不匹配，通常应该提交偏移（自动跳过），无论哪种模式都应提交
+                    indexMgr.commitOffset(consumerOffset);
                     continue;
                 }
 
@@ -313,13 +328,20 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                 // 记录此条偏移量用于 ACK
                 lastAckOffset = consumerOffset;
                 // 记录投递次数
-                indexMgr.recordDelivery(consumerOffset);
+                if (ackMode != AckMode.SERVER_IMMEDIATE) {
+                    indexMgr.recordDelivery(consumerOffset); // 记录投递（仅非立即模式）
+                }
                 // 临时推进偏移，以便获取下一条
                 indexMgr.advanceOffset();
             }
 
+            // 达到批量上限
+            if (ackMode == AckMode.SERVER_IMMEDIATE) {
+                indexMgr.commitOffset(lastAckOffset); // 立即提交最后一条偏移
+            }
+
             // 发送响应（根据单条/批量选择不同格式）
-            if (collected.size() == 1 && maxMessages == 1) {
+            if (collected.size() == 1) {
                 Message.MessagePayload payload = collected.get(0);
                 Message resp = new Message(Command.RESPONSE, topic, payload.getBody());
                 resp.setRequestId(msg.getRequestId());

@@ -1,5 +1,6 @@
 package com.minmq.broker.store;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,7 +20,7 @@ import java.util.List;
  */
 public class MessageLog {
     private static final Logger log = LoggerFactory.getLogger(MessageLog.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final ObjectMapper MAPPER = new ObjectMapper().setSerializationInclusion(JsonInclude.Include.NON_NULL);
     // 段文件最大大小（默认 1 GB）
     private static final long DEFAULT_MAX_SEGMENT_SIZE = 1024L * 1024L * 1024L; // 1GB
 
@@ -176,7 +177,7 @@ public class MessageLog {
         Segment seg = findSegment(offset);
         if (seg == null) return 0;
         MessageEntry entry = seg.readMessage(offset - seg.getBaseOffset());
-        return entry.timestamp;
+        return entry.ts;
     }
 
     // -------- 私有辅助方法 --------
@@ -298,7 +299,7 @@ public class MessageLog {
                 if (wrotePosition > 0) {
                     MessageEntry lastEntry = readMessage(wrotePosition -
                             (4 + getLastEntrySize()));
-                    this.lastTimestamp = lastEntry.timestamp;
+                    this.lastTimestamp = lastEntry.ts;
                 }
             } catch (Exception e) {
                 this.lastTimestamp = 0; // 兼容旧格式
@@ -417,7 +418,7 @@ public class MessageLog {
                 // 更新缓存的时间戳（需要解析本次写入的消息）
                 // 简单方式：每次追加后，解析最后一条消息获取时间戳
                 MessageEntry entry = readMessage(wrotePosition - (4 + buf.limit() - 4));
-                this.lastTimestamp = entry.timestamp;
+                this.lastTimestamp = entry.ts;
             } catch (Exception e) { /* ignore */ }
             return offset;
         }
@@ -465,86 +466,91 @@ public class MessageLog {
     // -------- 内部消息条目（保持不变） --------
     // 内部序列化结构，仅保存 topic 与 body（后续可扩展属性）
     public static class MessageEntry {
-        private String topic;
-        private String body;
-        private String tags;  // 新增
-        private long timestamp;
-        // 新增二进制 body 持久化
-        public byte[] bodyBytes;
-        public String bodyCodec;
+        // topic
+        private String p;
+        // body
+        private String b;
+        // tags
+        private String t;  // 新增
+        //        timestamp
+        private long ts;
+        // bodyBytes 新增二进制 body 持久化
+        public byte[] bb;
+        //        bodyCodec
+        public String bc;
 
         public MessageEntry() {
             // 无参构造器
         }
 
         public MessageEntry(long timestamp) {
-            this.timestamp = timestamp;
+            this.ts = timestamp;
         }
 
         public MessageEntry(String topic, String body, String tags, long timestamp) {
-            this.topic = topic;
-            this.body = body;
-            this.tags = tags;
-            this.timestamp = timestamp;
+            this.p = topic;
+            this.b = body;
+            this.t = tags;
+            this.ts = timestamp;
         }
 
         public MessageEntry(String topic, String body, String tags, long timestamp,
                             byte[] bodyBytes, String bodyCodec) {
-            this.topic = topic;
-            this.body = body;
-            this.tags = tags;
-            this.timestamp = timestamp;
-            this.bodyBytes = bodyBytes;
-            this.bodyCodec = bodyCodec;
+            this.p = topic;
+            this.b = body;
+            this.t = tags;
+            this.ts = timestamp;
+            this.bb = bodyBytes;
+            this.bc = bodyCodec;
         }
 
-        public long getTimestamp() {
-            return timestamp;
+        public long getTs() {
+            return ts;
         }
 
-        public void setTimestamp(long timestamp) {
-            this.timestamp = timestamp;
+        public void setTs(long ts) {
+            this.ts = ts;
         }
 
 
-        public String getTopic() {
-            return topic;
+        public String getP() {
+            return p;
         }
 
-        public void setTopic(String topic) {
-            this.topic = topic;
+        public void setP(String p) {
+            this.p = p;
         }
 
-        public String getBody() {
-            return body;
+        public String getB() {
+            return b;
         }
 
-        public void setBody(String body) {
-            this.body = body;
+        public void setB(String b) {
+            this.b = b;
         }
 
-        public String getTags() {
-            return tags;
+        public String getT() {
+            return t;
         }
 
-        public void setTags(String tags) {
-            this.tags = tags;
+        public void setT(String t) {
+            this.t = t;
         }
 
-        public byte[] getBodyBytes() {
-            return bodyBytes;
+        public byte[] getBb() {
+            return bb;
         }
 
-        public void setBodyBytes(byte[] bodyBytes) {
-            this.bodyBytes = bodyBytes;
+        public void setBb(byte[] bb) {
+            this.bb = bb;
         }
 
-        public String getBodyCodec() {
-            return bodyCodec;
+        public String getBc() {
+            return bc;
         }
 
-        public void setBodyCodec(String bodyCodec) {
-            this.bodyCodec = bodyCodec;
+        public void setBc(String bc) {
+            this.bc = bc;
         }
     }
 }

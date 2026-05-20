@@ -1,5 +1,6 @@
 package com.minmq.broker.metrics;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.minmq.broker.store.BrokerStore;
@@ -25,6 +26,8 @@ public class MetricsServer {
     private static final Logger log = LoggerFactory.getLogger(MetricsServer.class);
     private final int port;
     private final PrometheusMeterRegistry registry;
+    private final ObjectMapper Mapper = new ObjectMapper()
+            .setSerializationInclusion(JsonInclude.Include.NON_NULL);
 
     public MetricsServer(int port, PrometheusMeterRegistry registry) {
         this.port = port;
@@ -79,7 +82,7 @@ public class MetricsServer {
 
                                                 // 新增：获取所有 topic
                                                 if ("/admin/topics".equals(uri)) {
-                                                    String json = new ObjectMapper().writeValueAsString(store.getAllTopics());
+                                                    String json = Mapper.writeValueAsString(store.getAllTopics());
                                                     String html = "<html><body>" + json + "</body></html>";
                                                     FullHttpResponse response = new DefaultFullHttpResponse(
                                                             HttpVersion.HTTP_1_1, HttpResponseStatus.OK,
@@ -91,7 +94,7 @@ public class MetricsServer {
 
                                                 // 新增：获取消费者组
                                                 if ("/admin/consumers".equals(uri)) {
-                                                    String json = new ObjectMapper().writeValueAsString(store.getConsumerGroups());
+                                                    String json = Mapper.writeValueAsString(store.getConsumerGroups());
                                                     String html = "<html><body>" + json + "</body></html>";
                                                     FullHttpResponse response = new DefaultFullHttpResponse(
                                                             HttpVersion.HTTP_1_1, HttpResponseStatus.OK,
@@ -107,7 +110,7 @@ public class MetricsServer {
                                                     stats.put("produced", store.getMinuteProductionRates());
                                                     stats.put("consumed", store.getMinuteConsumptionRates());
 
-                                                    String html = "<html><body>" + new ObjectMapper().writeValueAsString(stats) + "</body></html>";
+                                                    String html = "<html><body>" + Mapper.writeValueAsString(stats) + "</body></html>";
                                                     FullHttpResponse response = new DefaultFullHttpResponse(
                                                             HttpVersion.HTTP_1_1, HttpResponseStatus.OK,
                                                             Unpooled.copiedBuffer(html, StandardCharsets.UTF_8));

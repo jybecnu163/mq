@@ -1,5 +1,6 @@
 package com.minmq.broker.store;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -41,7 +42,7 @@ public class BrokerStore {
     // 过去 60 分钟的环形缓冲区
     private final AtomicLongArray productionRates = new AtomicLongArray(60);
     private final AtomicLongArray consumptionRates = new AtomicLongArray(60);
-    private final ObjectMapper mapper = new ObjectMapper();
+    private final ObjectMapper mapper = new ObjectMapper().setSerializationInclusion(JsonInclude.Include.NON_NULL);
     // 环形缓冲区当前写入位置
     private volatile int minuteIndex = 0;
 
@@ -130,7 +131,7 @@ public class BrokerStore {
 
     // 原有 readMessage 删除，或改为调用 readMessageData().getBody()
     public String readMessage(long offset) throws Exception {
-        return readMessageData(offset).getBody();
+        return readMessageData(offset).getB();
     }
 
     /**
@@ -176,8 +177,8 @@ public class BrokerStore {
         while (current < endOffset) {
             try {
                 MessageLog.MessageEntry entry = messageLog.readMessage(current);
-                if (topic.equals(entry.getTopic())) {
-                    indexMgr.appendOffset(current, entry.getTimestamp());
+                if (topic.equals(entry.getP())) {
+                    indexMgr.appendOffset(current, entry.getTs());
                 }
                 // 计算本条消息的长度（4字节长度头 + 数据长度）
                 byte[] data = mapper.writeValueAsBytes(entry); // 需序列化一次计算长度，性能低

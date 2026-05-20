@@ -30,6 +30,9 @@ public class Consumer {
     }
 
     public Consumer(MQClient client, String topic, String group, String subscribeTag) {
+        if (topic.contains("-") || group.contains("-")) {
+            throw new RuntimeException("!!! topic and group can't contain -");
+        }
         this.client = client;
         this.topic = topic;
         this.group = group;

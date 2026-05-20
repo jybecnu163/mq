@@ -1,5 +1,6 @@
 package com.minmq.broker.handler;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.minmq.broker.store.BrokerStore;
 import com.minmq.broker.store.ConsumeIndexManager;
@@ -24,7 +25,7 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
     // 定时任务调度器，用于超时控制
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
     private static final int MAX_RETRY_COUNT = 3;   // 最大重试次数，可配置
-    ObjectMapper mapper = new ObjectMapper();
+    private static final ObjectMapper mapper = new ObjectMapper().setSerializationInclusion(JsonInclude.Include.NON_NULL);
 
     public MessageHandler(BrokerStore store) {
         this.store = store;
@@ -277,8 +278,8 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                     String dlqTopic = "DLQ-" + topic;
 
                     // 【修改点】死信转移需同时传递 bodyBytes 和 bodyCodec
-                    store.appendMessage(dlqTopic, entry.getBody(), entry.getTags(),
-                            entry.bodyBytes, entry.bodyCodec);
+                    store.appendMessage(dlqTopic, entry.getB(), entry.getT(),
+                            entry.bb, entry.bc);
 
                     // 自动 ACK 跳过该消息
                     indexMgr.commitOffset(consumerOffset); // 内部已清理投递计数
@@ -288,7 +289,7 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                     store.getMeterRegistry().counter("mq_dead_letter_total",
                             "originalTopic", topic, "group", group).increment();
                     log.info("Message moved to DLQ [{}]: body={}, codec={}",
-                            dlqTopic, entry.getBody(), entry.bodyCodec);
+                            dlqTopic, entry.getB(), entry.bc);
 
                     // 继续尝试拉取下一条消息
                     continue;
@@ -296,17 +297,17 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
 
                 // 读取完整消息（含 tags）
                 MessageLog.MessageEntry entry = store.readMessageData(physicalOffset);
-                if (!matchTag(entry.getTags(), subscribeTag)) {
+                if (!matchTag(entry.getT(), subscribeTag)) {
                     indexMgr.commitOffset(consumerOffset); // 跳过不匹配的消息
                     continue;
                 }
 
                 // --- 收集消息，填充二进制字段 ---
-                Message.MessagePayload payload = new Message.MessagePayload(topic, entry.getBody(), entry.getTags());
+                Message.MessagePayload payload = new Message.MessagePayload(topic, entry.getB(), entry.getT());
                 // 【修改点】如果存在二进制 body，则设置到 payload 中
-                if (entry.bodyBytes != null) {
-                    payload.setBodyBytes(entry.bodyBytes);
-                    payload.setBodyCodec(entry.bodyCodec);
+                if (entry.bb != null) {
+                    payload.setBodyBytes(entry.bb);
+                    payload.setBodyCodec(entry.bc);
                 }
                 collected.add(payload);
                 // 记录此条偏移量用于 ACK

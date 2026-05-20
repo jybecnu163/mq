@@ -1,5 +1,6 @@
 package com.minmq.common.protocol;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
@@ -9,7 +10,7 @@ import io.netty.handler.codec.MessageToByteEncoder;
 import java.util.List;
 
 public class MessageCodec {
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final ObjectMapper MAPPER = new ObjectMapper().setSerializationInclusion(JsonInclude.Include.NON_NULL);
 
     public static class Encoder extends MessageToByteEncoder<Message> {
         @Override

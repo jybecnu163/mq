@@ -1,5 +1,6 @@
 package com.minmq.example;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.minmq.client.Consumer;
@@ -21,7 +22,7 @@ public class ExampleClientMain {
     private final static SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss:DDD");
 
     public static void main(String[] args) throws Exception {
-        ObjectMapper mapper = new ObjectMapper();
+        ObjectMapper mapper = new ObjectMapper().setSerializationInclusion(JsonInclude.Include.NON_NULL);
 
         MQClient prodClient = new MQClient("localhost", 8080);
         MQClient consClient1 = new MQClient("localhost", 8080);

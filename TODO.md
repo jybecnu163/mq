@@ -29,6 +29,12 @@
     现状：依赖 FileChannel.write（可能只写到 OS 缓存）。
     改进：提供同步刷盘（force）选项，在关键业务中保证单条/批量消息落盘后再确认，降低断电丢失风险。
 
+    1.5 消息空数据字段移除    ✅ 
+    现状：原始数据中包含很多null值的数据，这部分数据占空间而无用处，可以在序列化josn时过滤，提示速度
+    改进：json序列化时过滤空字段
+    效果：
+        存储文件已无空字段，字段名已压缩
+
 #   2. 可观测性增强
     2.1 完善 Prometheus 指标
     新增指标：mq_messages_consumed_total（按 topic、group）、mq_consumer_lag（已部分实现）、请求处理耗时分布 (Histogram)、mq_active_connections、磁盘写入速率、文件段数、延时消息积压量等。这些指标帮助快速定位瓶颈和异常。

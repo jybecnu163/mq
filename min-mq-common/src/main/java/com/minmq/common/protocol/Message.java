@@ -36,6 +36,9 @@ public class Message {
     }
 
     public Message(Command command, String topic, String body) {
+        if (topic.contains("-")) {
+            throw new RuntimeException("!!! topic can't contain -");
+        }
         this.command = command.name();
         this.topic = topic;
         this.body = body;

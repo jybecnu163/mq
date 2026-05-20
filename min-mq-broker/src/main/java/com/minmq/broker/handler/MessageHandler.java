@@ -1,5 +1,6 @@
 package com.minmq.broker.handler;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.minmq.broker.store.BrokerStore;
 import com.minmq.broker.store.ConsumeIndexManager;
 import com.minmq.broker.store.MessageLog;
@@ -23,6 +24,7 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
     // 定时任务调度器，用于超时控制
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
     private static final int MAX_RETRY_COUNT = 3;   // 最大重试次数，可配置
+    ObjectMapper mapper = new ObjectMapper();
 
     public MessageHandler(BrokerStore store) {
         this.store = store;
@@ -31,6 +33,7 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, Message msg) throws Exception {
         Command cmd = msg.getCommand();
+        System.err.println(mapper.writeValueAsString(msg));
         switch (cmd) {
             case SEND:
                 if (msg.getDelayMs() > 0) {
@@ -82,6 +85,8 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
         String body = msg.getBody();
         String tags = msg.getTags();  // 获取 tags
         List<Message.MessagePayload> payloads = msg.getPayloads();
+        byte[] bodyBytes = msg.getBodyBytes();
+        String bodyCodec = msg.getBodyCodec();
 
         try {
             if (payloads != null && !payloads.isEmpty()) {
@@ -94,7 +99,10 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                             ? topic : p.getTopic();
 
                     // 写入消息日志，返回物理偏移量
-                    long offset = store.appendMessage(effectiveTopic, p.getBody(), p.getTags());
+                    byte[] pBodyBytes = p.getBodyBytes();
+                    String pBodyCodec = p.getBodyCodec();
+                    long offset = store.appendMessage(effectiveTopic, p.getBody(),
+                            p.getTags(), pBodyBytes, pBodyCodec);
                     offsets.add(offset);
                     affectedTopics.add(effectiveTopic);
 
@@ -120,7 +128,7 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                 ctx.writeAndFlush(ack);
             } else {
                 // ---- 单条发送（原有逻辑） ----
-                long offset = store.appendMessage(topic, body, tags);
+                long offset = store.appendMessage(topic, body, tags, bodyBytes, bodyCodec);
 
                 log.info("Message stored: topic={}, offset={}, body={}", topic, offset, body);
 
@@ -262,14 +270,15 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                 long consumerOffset = indexMgr.getConsumerOffset();
                 int attempts = indexMgr.getAttempts(consumerOffset);
 
-                // --- 核心：死信检查 ---
+                // --- 死信检查（增加二进制字段传递，防止死信丢失二进制负载） ---
                 if (attempts >= MAX_RETRY_COUNT) {
                     // 已达最大重试次数，转入死信队列
                     MessageLog.MessageEntry entry = store.readMessageData(physicalOffset);
                     String dlqTopic = "DLQ-" + topic;
 
-                    // 将消息写入死信主题（保留原 tags）
-                    store.appendMessage(dlqTopic, entry.getBody(), entry.getTags());
+                    // 【修改点】死信转移需同时传递 bodyBytes 和 bodyCodec
+                    store.appendMessage(dlqTopic, entry.getBody(), entry.getTags(),
+                            entry.bodyBytes, entry.bodyCodec);
 
                     // 自动 ACK 跳过该消息
                     indexMgr.commitOffset(consumerOffset); // 内部已清理投递计数
@@ -278,7 +287,8 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                     // 死信计数 +1
                     store.getMeterRegistry().counter("mq_dead_letter_total",
                             "originalTopic", topic, "group", group).increment();
-                    log.info("Message moved to DLQ [{}]: body={}", dlqTopic, entry.getBody());
+                    log.info("Message moved to DLQ [{}]: body={}, codec={}",
+                            dlqTopic, entry.getBody(), entry.bodyCodec);
 
                     // 继续尝试拉取下一条消息
                     continue;
@@ -291,23 +301,33 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                     continue;
                 }
 
-                // 匹配成功：收集消息
-                collected.add(new Message.MessagePayload(topic, entry.getBody(), entry.getTags()));
-                lastAckOffset = consumerOffset; // 记录此条偏移量用于 ACK
-                indexMgr.recordDelivery(consumerOffset); // 记录投递次数
-                indexMgr.advanceOffset(); // 临时推进偏移，以便获取下一条
+                // --- 收集消息，填充二进制字段 ---
+                Message.MessagePayload payload = new Message.MessagePayload(topic, entry.getBody(), entry.getTags());
+                // 【修改点】如果存在二进制 body，则设置到 payload 中
+                if (entry.bodyBytes != null) {
+                    payload.setBodyBytes(entry.bodyBytes);
+                    payload.setBodyCodec(entry.bodyCodec);
+                }
+                collected.add(payload);
+                // 记录此条偏移量用于 ACK
+                lastAckOffset = consumerOffset;
+                // 记录投递次数
+                indexMgr.recordDelivery(consumerOffset);
+                // 临时推进偏移，以便获取下一条
+                indexMgr.advanceOffset();
             }
 
-            // 位于 handlePull 方法末尾，替换原来的 sendBatchResponse 调用
+            // 发送响应（根据单条/批量选择不同格式）
             if (collected.size() == 1 && maxMessages == 1) {
-                // 单条拉取兼容：填充 body
                 Message.MessagePayload payload = collected.get(0);
                 Message resp = new Message(Command.RESPONSE, topic, payload.getBody());
                 resp.setRequestId(msg.getRequestId());
                 resp.setPullOffset(lastAckOffset);
+                // 【修改点】单条响应也要携带二进制字段
+                resp.setBodyBytes(payload.getBodyBytes());
+                resp.setBodyCodec(payload.getBodyCodec());
                 ctx.writeAndFlush(resp);
             } else {
-                // 批量拉取
                 // 达到批量上限，立即返回
                 sendBatchResponse(ctx, msg, collected, lastAckOffset);
             }

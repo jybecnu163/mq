@@ -62,7 +62,7 @@ Broker (单进程)
 mvn -pl min-mq-example exec:java -Dexec.mainClass="com.minmq.example.ExampleClientMain"
 ```
 
-示例中会启动一个 Producer 持续发送消息，两个 Consumer（group-1、group-2）独立消费，同时演示 Tag 过滤和延时消息。
+示例中会启动一个 Producer 持续发送消息，两个 Consumer（group_1、group_2）独立消费，同时演示 Tag 过滤和延时消息。
 
 ## 📡 协议支持
 

@@ -1,9 +1,6 @@
 package com.minmq.common.protocol;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
 
 public class Message {
     private String command;
@@ -29,6 +26,11 @@ public class Message {
     // 批量拉取相关
     private int maxMessages = 1;             // 消费者最大拉取条数
     private List<MessagePayload> messages;   // 服务端返回的批量消息
+    private byte[] bodyBytes;
+    /**
+     * "protobuf", "msgpack"
+     */
+    private String bodyCodec;
 
     public Message() {
     }
@@ -163,11 +165,31 @@ public class Message {
         this.messages = messages;
     }
 
+    public byte[] getBodyBytes() {
+        return bodyBytes;
+    }
+
+    public void setBodyBytes(byte[] bodyBytes) {
+        this.bodyBytes = bodyBytes;
+    }
+
+    public String getBodyCodec() {
+        return bodyCodec;
+    }
+
+    public void setBodyCodec(String bodyCodec) {
+        this.bodyCodec = bodyCodec;
+    }
+
     // 内部类：单条消息负载
     public static class MessagePayload {
         private String topic;
         private String body;
         private String tags;
+        // 新增
+        private byte[] bodyBytes;
+        private String bodyCodec;
+
 
         public MessagePayload() {
         }
@@ -202,12 +224,30 @@ public class Message {
             this.tags = tags;
         }
 
+        public byte[] getBodyBytes() {
+            return bodyBytes;
+        }
+
+        public void setBodyBytes(byte[] bodyBytes) {
+            this.bodyBytes = bodyBytes;
+        }
+
+        public String getBodyCodec() {
+            return bodyCodec;
+        }
+
+        public void setBodyCodec(String bodyCodec) {
+            this.bodyCodec = bodyCodec;
+        }
+
         @Override
         public String toString() {
             return "MessagePayload{" +
                     "topic='" + topic + '\'' +
                     ", body='" + body + '\'' +
                     ", tags='" + tags + '\'' +
+                    ", bodyBytes=" + Arrays.toString(bodyBytes) +
+                    ", bodyCodec='" + bodyCodec + '\'' +
                     '}';
         }
     }
@@ -229,6 +269,8 @@ public class Message {
                 ", payloads=" + payloads +
                 ", maxMessages=" + maxMessages +
                 ", messages=" + messages +
+                ", bodyBytes=" + Arrays.toString(bodyBytes) +
+                ", bodyCodec='" + bodyCodec + '\'' +
                 '}';
     }
 }

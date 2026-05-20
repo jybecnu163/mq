@@ -1,5 +1,6 @@
 package com.minmq.broker.store;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
@@ -40,7 +41,7 @@ public class BrokerStore {
     // 过去 60 分钟的环形缓冲区
     private final AtomicLongArray productionRates = new AtomicLongArray(60);
     private final AtomicLongArray consumptionRates = new AtomicLongArray(60);
-
+    private final ObjectMapper mapper = new ObjectMapper();
     // 环形缓冲区当前写入位置
     private volatile int minuteIndex = 0;
 
@@ -55,7 +56,7 @@ public class BrokerStore {
                 long offset = messageLog.append(topic, body, tags);
                 // 为所有已注册的消费者组追加索引
                 for (Map.Entry<String, ConsumeIndexManager> entry : groupIndexes.entrySet()) {
-                    if (entry.getKey().startsWith(topic + "!@#$")) {
+                    if (entry.getKey().startsWith(topic + "-")) {
                         entry.getValue().appendOffset(offset, now);
                     }
                 }
@@ -110,11 +111,17 @@ public class BrokerStore {
      * 追加消息，返回物理偏移量
      */
     public long appendMessage(String topic, String body, String tags) throws Exception {
+        // 保留旧重载，内部调用新增的带二进制参数的方法
+        return appendMessage(topic, body, tags, null, null);
+    }
+
+    public long appendMessage(String topic, String body, String tags,
+                              byte[] bodyBytes, String bodyCodec) throws Exception {
         long now = System.currentTimeMillis();
-        long offset = messageLog.append(topic, body, tags, now);
-        // 为所有已注册组追加索引（带时间戳）
+        long offset = messageLog.append(topic, body, tags, now, bodyBytes, bodyCodec);
+        // 为所有已注册的消费者组追加索引
         for (Map.Entry<String, ConsumeIndexManager> entry : groupIndexes.entrySet()) {
-            if (entry.getKey().startsWith(topic + "!@#$")) {
+            if (entry.getKey().startsWith(topic + "-")) {
                 entry.getValue().appendOffset(offset, now);
             }
         }
@@ -136,15 +143,50 @@ public class BrokerStore {
     /**
      * 获取或创建指定 topic + group 的消费索引管理器，并自动注册到 topicGroups
      */
-    public ConsumeIndexManager getOrCreateIndex(String topic, String group) {
-        String key = topic + "!@#$" + group;
-        return groupIndexes.computeIfAbsent(key, k -> {
-            try {
-                return new ConsumeIndexManager(dataDir, topic, group);
-            } catch (Exception e) {
-                throw new RuntimeException(e);
+    public ConsumeIndexManager getOrCreateIndex(String topic, String group) throws Exception {
+        String key = topic + "-" + group;
+        ConsumeIndexManager indexMgr = groupIndexes.get(key);
+        if (indexMgr == null) {
+            synchronized (groupIndexes) {
+                indexMgr = groupIndexes.get(key);
+                if (indexMgr == null) {
+                    indexMgr = new ConsumeIndexManager(dataDir, topic, group);
+                    groupIndexes.put(key, indexMgr);
+
+                    // 回填历史消息索引
+//                    rebuildIndexFromHistory(topic, indexMgr);
+                }
             }
-        });
+        }
+        return indexMgr;
+    }
+
+    /**
+     * 扫描 message.log 中所有指定 topic 的消息，追加到该消费者的索引中
+     */
+    private void rebuildIndexFromHistory(String topic, ConsumeIndexManager indexMgr) throws Exception {
+        // 从头扫描所有段文件（这个操作比较重，仅用于演示）
+        long scannedOffset = 0; // 全局偏移量起点从0开始，实际应从第一个段开始
+        // 实际上我们需要从 messageLog 的第一个段开始，按顺序遍历所有消息
+        // MessageLog 需要提供遍历接口。此处简化：直接读取消息并检查 topic。
+        // 注意：这只是原型方案，生产环境中应该维护全局 topic 索引。
+        long startOffset = 0;
+        long endOffset = 99999;//messageLog.getTotalSize(); // 需新增方法获取总大小
+        long current = startOffset;
+        while (current < endOffset) {
+            try {
+                MessageLog.MessageEntry entry = messageLog.readMessage(current);
+                if (topic.equals(entry.getTopic())) {
+                    indexMgr.appendOffset(current, entry.getTimestamp());
+                }
+                // 计算本条消息的长度（4字节长度头 + 数据长度）
+                byte[] data = mapper.writeValueAsBytes(entry); // 需序列化一次计算长度，性能低
+                current += 4 + data.length;
+            } catch (Exception e) {
+                // 可能遇到文件末尾损坏，停止
+                break;
+            }
+        }
     }
 
     /**
@@ -183,7 +225,7 @@ public class BrokerStore {
         Set<String> topics = new HashSet<>();
         // topic 信息可以从 groupIndexes 的 key 中提取，或者维护一个单独的 topic 集合
         for (String key : groupIndexes.keySet()) {
-            String topic = key.substring(0, key.lastIndexOf("!@#$"));
+            String topic = key.substring(0, key.lastIndexOf("-"));
             topics.add(topic);
         }
         return topics;
@@ -192,9 +234,9 @@ public class BrokerStore {
     public Map<String, Set<String>> getConsumerGroups() {
         Map<String, Set<String>> topicGroups = new HashMap<>();
         for (String key : groupIndexes.keySet()) {
-            int idx = key.lastIndexOf("!@#$");
+            int idx = key.lastIndexOf("1");
             String topic = key.substring(0, idx);
-            String group = key.substring(idx + 4);
+            String group = key.substring(idx + 1);
             topicGroups.computeIfAbsent(topic, k -> new HashSet<>()).add(group);
         }
         return topicGroups;

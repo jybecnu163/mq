@@ -105,10 +105,22 @@ public class MessageLog {
 
     // -------- 公开方法 --------
 
+
+    // 原有两个参数的 append（兼容旧调用）
+    public synchronized long append(String topic, String body, String tags) throws Exception {
+        return append(topic, body, tags, System.currentTimeMillis(), null, null);
+    }
+
+    // 带有时间戳的 append（已有）
+    public synchronized long append(String topic, String body, String tags, long timestamp) throws Exception {
+        return append(topic, body, tags, timestamp, null, null);
+    }
+
     /**
      * 追加消息，返回全局物理偏移量（写入前的位置）。
      */
-    public synchronized long append(String topic, String body, String tags, long timestamp) throws Exception {
+    public synchronized long append(String topic, String body, String tags, long timestamp,
+                                    byte[] bodyBytes, String bodyCodec) throws Exception {
         // 需要时创建或切换段
         if (activeSegment == null || activeSegment.size() >= maxSegmentSize) {
             // 首先检查当前活动段是否达到大小上限，若超过则创建新段。
@@ -116,7 +128,8 @@ public class MessageLog {
         }
 
         // 构造 MessageEntry 对象，包含主题、体、标签和时间戳。
-        MessageEntry entry = new MessageEntry(topic, body, tags, timestamp);
+        MessageEntry entry = new MessageEntry(topic, body, tags, timestamp, bodyBytes, bodyCodec);
+
         byte[] data = MAPPER.writeValueAsBytes(entry);
         int length = data.length;
 
@@ -129,11 +142,6 @@ public class MessageLog {
 
         // 返回的 offset 是全局物理偏移量，即该消息在日志文件中的起始位置。
         return activeSegment.append(buf);
-    }
-
-    // 兼容旧调用（无 tags）
-    public synchronized long append(String topic, String body, String tags) throws Exception {
-        return append(topic, body, tags, System.currentTimeMillis());
     }
 
     /**
@@ -461,6 +469,9 @@ public class MessageLog {
         private String body;
         private String tags;  // 新增
         private long timestamp;
+        // 新增二进制 body 持久化
+        public byte[] bodyBytes;
+        public String bodyCodec;
 
         public MessageEntry() {
             // 无参构造器
@@ -475,6 +486,16 @@ public class MessageLog {
             this.body = body;
             this.tags = tags;
             this.timestamp = timestamp;
+        }
+
+        public MessageEntry(String topic, String body, String tags, long timestamp,
+                            byte[] bodyBytes, String bodyCodec) {
+            this.topic = topic;
+            this.body = body;
+            this.tags = tags;
+            this.timestamp = timestamp;
+            this.bodyBytes = bodyBytes;
+            this.bodyCodec = bodyCodec;
         }
 
         public long getTimestamp() {
@@ -508,6 +529,22 @@ public class MessageLog {
 
         public void setTags(String tags) {
             this.tags = tags;
+        }
+
+        public byte[] getBodyBytes() {
+            return bodyBytes;
+        }
+
+        public void setBodyBytes(byte[] bodyBytes) {
+            this.bodyBytes = bodyBytes;
+        }
+
+        public String getBodyCodec() {
+            return bodyCodec;
+        }
+
+        public void setBodyCodec(String bodyCodec) {
+            this.bodyCodec = bodyCodec;
         }
     }
 }

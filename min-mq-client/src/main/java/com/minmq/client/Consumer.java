@@ -102,9 +102,20 @@ public class Consumer {
 
         // 构造一条纯业务消息返回给调用方
         Message result = new Message();
-        result.setBody(response.getBody());
         result.setTopic(topic);
+
+        // ---- 新增：传递二进制字段 ----
+        byte[] bodyBytes = response.getBodyBytes();
+        if (bodyBytes != null) {
+            result.setBodyBytes(bodyBytes);
+            result.setBodyCodec(response.getBodyCodec());
+            result.setBody(null);  // 二进制优先，字符串 body 置空
+        } else {
+            result.setBody(response.getBody());
+        }
         result.setPullOffset(lastPullOffset);
+        result.setTags(response.getTags());  // 如果需要的话，也可以透传 tags
+
         return result;
     }
 

@@ -18,7 +18,7 @@ public class DelayMessageScheduler {
 
     // 回调：当消息到期时调用，参数为 (topic, body)
     public interface DelayedMessageHandler {
-        void onExpire(String topic, String body, String tags);
+        void onExpire(String topic, byte[] body, String tags);
     }
 
     private final DelayedMessageHandler handler;
@@ -56,12 +56,12 @@ public class DelayMessageScheduler {
     /**
      * 新增一条延时消息：先持久化到磁盘，再放入内存时间轮
      */
-    public void schedule(long expireTime, String topic, String body, String tags) throws IOException {
+    public void schedule(long expireTime, String topic, byte[] body, String tags) throws IOException {
         diskStore.store(expireTime, topic, body, tags);
         scheduleMemoryTask(expireTime, topic, body, tags);
     }
 
-    private void scheduleMemoryTask(long expireTime, String topic, String body, String tags) {
+    private void scheduleMemoryTask(long expireTime, String topic, byte[] body, String tags) {
         long delay = expireTime - System.currentTimeMillis();
         if (delay <= 0) {
             // 立即到期，直接投递

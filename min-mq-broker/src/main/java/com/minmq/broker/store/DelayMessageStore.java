@@ -30,7 +30,7 @@ public class DelayMessageStore {
      * @param body
      * @return 写入的文件路径（用于调试）
      */
-    public String store(long expireTime, String topic, String body, String tags) throws IOException {
+    public String store(long expireTime, String topic, byte[] body, String tags) throws IOException {
         // 根据到期时间所属的小时生成文件名
         String hourFile = getHourFile(expireTime);
         File file = new File(delayDir, hourFile);
@@ -39,16 +39,15 @@ public class DelayMessageStore {
             channel.position(channel.size()); // 追加到末尾
 
             byte[] topicBytes = topic.getBytes(StandardCharsets.UTF_8);
-            byte[] bodyBytes = body.getBytes(StandardCharsets.UTF_8);
             byte[] tagsBytes = tags != null ? tags.getBytes(StandardCharsets.UTF_8) : new byte[0];
 
-            int totalLen = 8 + 4 + topicBytes.length + 4 + bodyBytes.length + 4 + tagsBytes.length;
+            int totalLen = 8 + 4 + topicBytes.length + 4 + body.length + 4 + tagsBytes.length;
             ByteBuffer buf = ByteBuffer.allocate(totalLen);
             buf.putLong(expireTime);
             buf.putInt(topicBytes.length);
             buf.put(topicBytes);
-            buf.putInt(bodyBytes.length);
-            buf.put(bodyBytes);
+            buf.putInt(body.length);
+            buf.put(body);
             buf.putInt(tagsBytes.length);      // 新增：tags 长度 + 数据
             buf.put(tagsBytes);
             buf.flip();
@@ -85,7 +84,7 @@ public class DelayMessageStore {
                     if (buf.remaining() < bodyLen) break;
                     byte[] bodyBytes = new byte[bodyLen];
                     buf.get(bodyBytes);
-                    String body = new String(bodyBytes, StandardCharsets.UTF_8);
+                    byte[] body = bodyBytes;
 
                     // 在读取完 body 之后继续读取 tags
                     int tagsLen = buf.getInt();
@@ -124,10 +123,10 @@ public class DelayMessageStore {
     public static class DelayMessageEntry {
         public final long expireTime;
         public final String topic;
-        public final String body;
+        public final byte[] body;
         public final String tags;      // 新增
 
-        public DelayMessageEntry(long expireTime, String topic, String body, String tags) {
+        public DelayMessageEntry(long expireTime, String topic, byte[] body, String tags) {
             this.expireTime = expireTime;
             this.topic = topic;
             this.body = body;

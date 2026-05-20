@@ -47,7 +47,7 @@ public class Consumer {
      * @return 消息列表（可能为空）
      */
     public List<Message.MessagePayload> pullBatch() throws InterruptedException {
-        Message request = new Message(Command.PULL, topic, "");
+        Message request = new Message(Command.PULL, topic, null);
         request.setGroup(group);
         request.setSubscribeTag(subscribeTag);
         request.setStartTime(startTime);
@@ -77,7 +77,7 @@ public class Consumer {
      * 拉取一条消息，如果没有新消息返回 null
      */
     public Message pull() throws InterruptedException {
-        Message request = new Message(Command.PULL, topic, "");
+        Message request = new Message(Command.PULL, topic, null);
         request.setGroup(group);                // 设置消费者组
         request.setSubscribeTag(subscribeTag);  // 设置订阅标签
         request.setStartTime(startTime);
@@ -116,15 +116,9 @@ public class Consumer {
         Message result = new Message();
         result.setTopic(topic);
 
-        // ---- 新增：传递二进制字段 ----
-        byte[] bodyBytes = response.getBodyBytes();
-        if (bodyBytes != null) {
-            result.setBodyBytes(bodyBytes);
-            result.setBodyCodec(response.getBodyCodec());
-            result.setBody(null);  // 二进制优先，字符串 body 置空
-        } else {
-            result.setBody(response.getBody());
-        }
+        result.setBodyCodec(response.getBodyCodec());
+        result.setBody(response.getBody());
+
         result.setPullOffset(lastPullOffset);
         result.setTags(response.getTags());  // 如果需要的话，也可以透传 tags
 
@@ -165,7 +159,7 @@ public class Consumer {
             lastPullOffset = -1; // 清空，防止重复调用
             return;
         }
-        Message ackMsg = new Message(Command.ACK, topic, "");
+        Message ackMsg = new Message(Command.ACK, topic, null);
         ackMsg.setGroup(group);
         ackMsg.setPullOffset(lastPullOffset);
         client.send(ackMsg).get();

@@ -6,6 +6,7 @@ import com.minmq.broker.store.BrokerStore;
 import com.minmq.broker.store.ConsumeIndexManager;
 import com.minmq.broker.store.MessageLog;
 import com.minmq.common.protocol.AckMode;
+import com.minmq.common.protocol.BodyCodec;
 import com.minmq.common.protocol.Command;
 import com.minmq.common.protocol.Message;
 import io.netty.channel.ChannelHandlerContext;
@@ -53,7 +54,7 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                 handleAck(ctx, msg);
                 break;
             default:
-                Message error = new Message(Command.RESPONSE, null, "Unknown command");
+                Message error = new Message(null, "Unknown command");
                 error.setRequestId(msg.getRequestId());
                 ctx.writeAndFlush(error);
         }
@@ -62,7 +63,7 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
     private void handleDelaySend(ChannelHandlerContext ctx, Message msg) {
         try {
             String topic = msg.getTopic();
-            String body = msg.getBody();
+            byte[] body = msg.getBody();
             long delayMs = msg.getDelayMs();
             long expireTime = System.currentTimeMillis() + delayMs;
 
@@ -71,12 +72,12 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
 
             log.info("Delay message scheduled: topic={}, body={}, expireAt={}", topic, body, expireTime);
 
-            Message ack = new Message(Command.RESPONSE, topic, "OK");
+            Message ack = new Message(topic, "OK");
             ack.setRequestId(msg.getRequestId());
             ctx.writeAndFlush(ack);
         } catch (Exception e) {
             e.printStackTrace();
-            Message error = new Message(Command.RESPONSE, msg.getTopic(), "ERROR");
+            Message error = new Message(msg.getTopic(), "ERROR");
             error.setRequestId(msg.getRequestId());
             ctx.writeAndFlush(error);
         }
@@ -84,11 +85,11 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
 
     private void handleSend(ChannelHandlerContext ctx, Message msg) {
         String topic = msg.getTopic();
-        String body = msg.getBody();
+        byte[] body = msg.getBody();
         String tags = msg.getTags();  // 获取 tags
         List<Message.MessagePayload> payloads = msg.getPayloads();
-        byte[] bodyBytes = msg.getBodyBytes();
-        String bodyCodec = msg.getBodyCodec();
+
+        BodyCodec bodyCodec = msg.getBodyCodec();
 
         try {
             if (payloads != null && !payloads.isEmpty()) {
@@ -101,10 +102,8 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                             ? topic : p.getTopic();
 
                     // 写入消息日志，返回物理偏移量
-                    byte[] pBodyBytes = p.getBodyBytes();
-                    String pBodyCodec = p.getBodyCodec();
                     long offset = store.appendMessage(effectiveTopic, p.getBody(),
-                            p.getTags(), pBodyBytes, pBodyCodec);
+                            p.getTags(), p.getBodyCodec());
                     offsets.add(offset);
                     affectedTopics.add(effectiveTopic);
 
@@ -124,13 +123,13 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                 // 将偏移量列表编码返回
                 String offsetsStr = offsets.stream().map(String::valueOf)
                         .collect(Collectors.joining(","));
-                Message ack = new Message(Command.RESPONSE, topic, "OK");
+                Message ack = new Message(topic, "OK");
                 ack.setRequestId(msg.getRequestId());
                 ack.getHeaders().put("offsets", offsetsStr);
                 ctx.writeAndFlush(ack);
             } else {
                 // ---- 单条发送（原有逻辑） ----
-                long offset = store.appendMessage(topic, body, tags, bodyBytes, bodyCodec);
+                long offset = store.appendMessage(topic, body, tags, bodyCodec);
 
                 log.info("Message stored: topic={}, offset={}, body={}", topic, offset, body);
 
@@ -140,12 +139,12 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                 wakeupPendingPulls(topic);
 
                 // 回复生产者
-                Message ack = new Message(Command.RESPONSE, topic, "OK");
+                Message ack = new Message(topic, "OK");
                 ack.setRequestId(msg.getRequestId());
                 ctx.writeAndFlush(ack);
             }
         } catch (Exception e) {
-            Message error = new Message(Command.RESPONSE, msg.getTopic(), "ERROR_SEND");
+            Message error = new Message(msg.getTopic(), "ERROR_SEND");
             error.setRequestId(msg.getRequestId());
             ctx.writeAndFlush(error);
         }
@@ -192,8 +191,8 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                             = store.getOrCreateIndex(pending.topic, pending.group);
                     long offset = indexMgr.peekNextOffset();
                     if (offset >= 0) {
-                        String body = store.readMessage(offset);
-                        Message resp = new Message(Command.RESPONSE, pending.topic, body);
+                        byte[] body = store.readMessage(offset);
+                        Message resp = new Message(pending.topic, body);
                         resp.setRequestId(pending.requestId);
                         resp.setPullOffset(indexMgr.getConsumerOffset());
                         pending.ctx.writeAndFlush(resp);
@@ -202,14 +201,14 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                     } else {
                         // 极端情况：消息刚被其他消费者取走，仍无新消息，则挂起（此处简单处理，重新挂起）
                         // 但为了避免复杂逻辑，可直接返回空响应
-                        Message emptyResp = new Message(Command.RESPONSE, pending.topic, null);
+                        Message emptyResp = new Message(pending.topic, "empty");
                         emptyResp.setRequestId(pending.requestId);
                         emptyResp.setPullOffset(-1);
                         pending.ctx.writeAndFlush(emptyResp);
                     }
                 } catch (Exception e) {
                     e.printStackTrace();
-                    Message error = new Message(Command.RESPONSE, pending.topic, "ERROR");
+                    Message error = new Message(pending.topic, "ERROR");
                     error.setRequestId(pending.requestId);
                     pending.ctx.writeAndFlush(error);
                 }
@@ -268,7 +267,7 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                         // 检查请求是否仍在列表中（可能已被唤醒移除）
                         if (list.remove(pending)) {
                             // 发送空响应
-                            Message emptyResp = new Message(Command.RESPONSE, topic, null);
+                            Message emptyResp = new Message(topic, "empty");
                             emptyResp.setRequestId(msg.getRequestId());
                             emptyResp.setPullOffset(-1);
                             ctx.writeAndFlush(emptyResp);
@@ -291,7 +290,7 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
 
                         // 【修改点】死信转移需同时传递 bodyBytes 和 bodyCodec
                         store.appendMessage(dlqTopic, entry.getB(), entry.getT(),
-                                entry.bb, entry.bc);
+                                entry.getBc());
 
                         // 自动 ACK 跳过该消息
                         indexMgr.commitOffset(consumerOffset); // 内部已清理投递计数
@@ -301,7 +300,7 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                         store.getMeterRegistry().counter("mq_dead_letter_total",
                                 "originalTopic", topic, "group", group).increment();
                         log.info("Message moved to DLQ [{}]: body={}, codec={}",
-                                dlqTopic, entry.getB(), entry.bc);
+                                dlqTopic, entry.getB(), entry.getBc());
 
                         // 继续尝试拉取下一条消息
                         continue;
@@ -320,9 +319,9 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                 // --- 收集消息，填充二进制字段 ---
                 Message.MessagePayload payload = new Message.MessagePayload(topic, entry.getB(), entry.getT());
                 // 【修改点】如果存在二进制 body，则设置到 payload 中
-                if (entry.bb != null) {
-                    payload.setBodyBytes(entry.bb);
-                    payload.setBodyCodec(entry.bc);
+                if (entry.b != null) {
+                    payload.setBody(entry.b);
+                    payload.setBodyCodec(entry.getBc());
                 }
                 collected.add(payload);
                 // 记录此条偏移量用于 ACK
@@ -347,7 +346,7 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                 resp.setRequestId(msg.getRequestId());
                 resp.setPullOffset(lastAckOffset);
                 // 【修改点】单条响应也要携带二进制字段
-                resp.setBodyBytes(payload.getBodyBytes());
+                resp.setBody(payload.getBody());
                 resp.setBodyCodec(payload.getBodyCodec());
                 ctx.writeAndFlush(resp);
             } else {
@@ -357,7 +356,7 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
         } catch (Exception e) {
             log.error("Error in handlePull", e);
             // 即使出错也返回错误
-            Message error = new Message(Command.RESPONSE, msg.getTopic(), "PULL_ERROR");
+            Message error = new Message(msg.getTopic(), "PULL_ERROR");
             error.setRequestId(msg.getRequestId());
             ctx.writeAndFlush(error);
         }
@@ -368,7 +367,7 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
      */
     private void sendBatchResponse(ChannelHandlerContext ctx, Message request,
                                    List<Message.MessagePayload> messages, long ackOffset) {
-        Message resp = new Message(Command.RESPONSE, request.getTopic(), null);
+        Message resp = new Message(request.getTopic(), "");
         resp.setRequestId(request.getRequestId());
         resp.setMessages(messages);
         resp.setPullOffset(ackOffset);   // 客户端 ACK 时需使用此偏移量
@@ -406,13 +405,13 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
             }
 
             // 回复确认，防止客户端阻塞
-            Message resp = new Message(Command.RESPONSE, topic, "ACK_OK");
+            Message resp = new Message(topic, "ACK_OK");
             resp.setRequestId(msg.getRequestId());
             ctx.writeAndFlush(resp);
         } catch (Exception e) {
             log.error("Error in handleAck", e);
             // 即使出错也返回错误
-            Message error = new Message(Command.RESPONSE, msg.getTopic(), "ACK_ERROR");
+            Message error = new Message(msg.getTopic(), "ACK_ERROR");
             error.setRequestId(msg.getRequestId());
             ctx.writeAndFlush(error);
         }

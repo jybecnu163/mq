@@ -1,63 +1,102 @@
 package com.minmq.common.protocol;
 
-import java.util.*;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class Message {
-    private String command;
+    private Command command;
     private String requestId;
     private String topic;
-    private String body;
-    // 消费者组，用于区分不同消费组进度
     private String group;
-    // 消费进度偏移量，PULL 时服务端返回，ACK 时客户端回传
     private long pullOffset = -1;
     private Map<String, String> headers = new HashMap<>();
-    // 延时消息专用字段（单位：毫秒）
     private long delayMs = 0;
 
-    // 新增：消息标签（生产者设置）
+    // body 改为 byte[]，统一承载消息体
+    private byte[] body;
+    // 编码类型
+    private BodyCodec bodyCodec = BodyCodec.TEXT;  // 默认为文本，兼容旧数据
+    // 标签保留字符串
     private String tags;
-    // 新增：消费者订阅的标签（消费者拉取时使用）
+
+    // 消费者相关
     private String subscribeTag;
-    private long startTime = 0;   // 起始消费时间（毫秒时间戳），0 表示从最早开始
+    private long startTime = 0;
+    private int maxMessages = 1;
+    private List<MessagePayload> messages;
+    private List<MessagePayload> payloads;
 
-    // 批量发送相关
-    private List<MessagePayload> payloads;   // 批量发送时使用
-    // 批量拉取相关
-    private int maxMessages = 1;             // 消费者最大拉取条数
-    private List<MessagePayload> messages;   // 服务端返回的批量消息
-    private byte[] bodyBytes;
-    /**
-     * "protobuf", "msgpack"
-     */
-    private String bodyCodec;
+    private String info;
 
+    // 构造方法
     public Message() {
     }
 
-    public Message(Command command, String topic, String body) {
+    public Message(Command command, String topic, byte[] body) {
         if (topic.contains("-")) {
             throw new RuntimeException("!!! topic can't contain -");
         }
-        this.command = command.name();
+        this.command = command;
         this.topic = topic;
         this.body = body;
         this.requestId = UUID.randomUUID().toString();
     }
 
+    public Message(Command command, String topic, byte[] body, BodyCodec bodyCodec) {
+        if (topic.contains("-")) {
+            throw new RuntimeException("!!! topic can't contain -");
+        }
+        this.command = command;
+        this.topic = topic;
+        this.body = body;
+        this.bodyCodec = bodyCodec;
+        this.requestId = UUID.randomUUID().toString();
+    }
+
+    public Message(String topic, byte[] body) {
+        this.command = Command.RESPONSE;
+
+        this.topic = topic;
+        this.body = body;
+    }
+
+    public Message(String topic, String info) {
+        this.command = Command.RESPONSE;
+
+        this.topic = topic;
+        this.info = info;
+    }
+
     // 新增构造方法，方便创建延时消息
-    public static Message createDelay(String topic, String body, long delayMs) {
+    public static Message createDelay(String topic, byte[] body, long delayMs) {
+        if (topic.contains("-")) {
+            throw new RuntimeException("!!! topic can't contain -");
+        }
         Message msg = new Message(Command.SEND, topic, body);
         msg.delayMs = delayMs;
         return msg;
     }
 
+    public static Message createDelay(String topic, byte[] body, BodyCodec bodyCodec, long delayMs) {
+        if (topic.contains("-")) {
+            throw new RuntimeException("!!! topic can't contain -");
+        }
+        Message msg = new Message(Command.SEND, topic, body, bodyCodec);
+        msg.delayMs = delayMs;
+        return msg;
+    }
+
     public Command getCommand() {
-        return Command.valueOf(command);
+        return command;
     }
 
     public void setCommand(Command command) {
-        this.command = command.name();
+        this.command = command;
     }
 
     public String getRequestId() {
@@ -76,20 +115,12 @@ public class Message {
         this.topic = topic;
     }
 
-    public String getBody() {
-        return body;
+    public String getGroup() {
+        return group;
     }
 
-    public void setBody(String body) {
-        this.body = body;
-    }
-
-    public Map<String, String> getHeaders() {
-        return headers;
-    }
-
-    public void setHeaders(Map<String, String> headers) {
-        this.headers = headers;
+    public void setGroup(String group) {
+        this.group = group;
     }
 
     public long getPullOffset() {
@@ -100,12 +131,12 @@ public class Message {
         this.pullOffset = pullOffset;
     }
 
-    public String getGroup() {
-        return group;
+    public Map<String, String> getHeaders() {
+        return headers;
     }
 
-    public void setGroup(String group) {
-        this.group = group;
+    public void setHeaders(Map<String, String> headers) {
+        this.headers = headers;
     }
 
     public long getDelayMs() {
@@ -114,6 +145,30 @@ public class Message {
 
     public void setDelayMs(long delayMs) {
         this.delayMs = delayMs;
+    }
+
+    public String getInfo() {
+        return info;
+    }
+
+    public void setInfo(String info) {
+        this.info = info;
+    }
+
+    public byte[] getBody() {
+        return body;
+    }
+
+    public void setBody(byte[] body) {
+        this.body = body;
+    }
+
+    public BodyCodec getBodyCodec() {
+        return bodyCodec;
+    }
+
+    public void setBodyCodec(BodyCodec bodyCodec) {
+        this.bodyCodec = bodyCodec;
     }
 
     public String getTags() {
@@ -140,18 +195,6 @@ public class Message {
         this.startTime = startTime;
     }
 
-    public void setCommand(String command) {
-        this.command = command;
-    }
-
-    public List<MessagePayload> getPayloads() {
-        return payloads;
-    }
-
-    public void setPayloads(List<MessagePayload> payloads) {
-        this.payloads = payloads;
-    }
-
     public int getMaxMessages() {
         return maxMessages;
     }
@@ -168,39 +211,35 @@ public class Message {
         this.messages = messages;
     }
 
-    public byte[] getBodyBytes() {
-        return bodyBytes;
+    public List<MessagePayload> getPayloads() {
+        return payloads;
     }
 
-    public void setBodyBytes(byte[] bodyBytes) {
-        this.bodyBytes = bodyBytes;
-    }
-
-    public String getBodyCodec() {
-        return bodyCodec;
-    }
-
-    public void setBodyCodec(String bodyCodec) {
-        this.bodyCodec = bodyCodec;
+    public void setPayloads(List<MessagePayload> payloads) {
+        this.payloads = payloads;
     }
 
     // 内部类：单条消息负载
     public static class MessagePayload {
         private String topic;
-        private String body;
+        private byte[] body;         // 改为 byte[]
+        private BodyCodec bodyCodec = BodyCodec.TEXT;
         private String tags;
-        // 新增
-        private byte[] bodyBytes;
-        private String bodyCodec;
 
 
         public MessagePayload() {
         }
 
-        public MessagePayload(String topic, String body, String tags) {
+        public MessagePayload(String topic, byte[] body, BodyCodec codec, String tags) {
             this.topic = topic;
             this.body = body;
+            this.bodyCodec = codec;
             this.tags = tags;
+        }
+
+        // 兼容旧构造（String body）
+        public MessagePayload(String topic, byte[] bodyStr, String tags) {
+            this(topic, bodyStr, BodyCodec.TEXT, tags);
         }
 
         public String getTopic() {
@@ -211,12 +250,20 @@ public class Message {
             this.topic = topic;
         }
 
-        public String getBody() {
+        public byte[] getBody() {
             return body;
         }
 
-        public void setBody(String body) {
+        public void setBody(byte[] body) {
             this.body = body;
+        }
+
+        public BodyCodec getBodyCodec() {
+            return bodyCodec;
+        }
+
+        public void setBodyCodec(BodyCodec bodyCodec) {
+            this.bodyCodec = bodyCodec;
         }
 
         public String getTags() {
@@ -226,54 +273,5 @@ public class Message {
         public void setTags(String tags) {
             this.tags = tags;
         }
-
-        public byte[] getBodyBytes() {
-            return bodyBytes;
-        }
-
-        public void setBodyBytes(byte[] bodyBytes) {
-            this.bodyBytes = bodyBytes;
-        }
-
-        public String getBodyCodec() {
-            return bodyCodec;
-        }
-
-        public void setBodyCodec(String bodyCodec) {
-            this.bodyCodec = bodyCodec;
-        }
-
-        @Override
-        public String toString() {
-            return "MessagePayload{" +
-                    "topic='" + topic + '\'' +
-                    ", body='" + body + '\'' +
-                    ", tags='" + tags + '\'' +
-                    ", bodyBytes=" + Arrays.toString(bodyBytes) +
-                    ", bodyCodec='" + bodyCodec + '\'' +
-                    '}';
-        }
-    }
-
-    @Override
-    public String toString() {
-        return "Message{" +
-                "command='" + command + '\'' +
-                ", requestId='" + requestId + '\'' +
-                ", topic='" + topic + '\'' +
-                ", body='" + body + '\'' +
-                ", group='" + group + '\'' +
-                ", pullOffset=" + pullOffset +
-                ", headers=" + headers +
-                ", delayMs=" + delayMs +
-                ", tags='" + tags + '\'' +
-                ", subscribeTag='" + subscribeTag + '\'' +
-                ", startTime=" + startTime +
-                ", payloads=" + payloads +
-                ", maxMessages=" + maxMessages +
-                ", messages=" + messages +
-                ", bodyBytes=" + Arrays.toString(bodyBytes) +
-                ", bodyCodec='" + bodyCodec + '\'' +
-                '}';
     }
 }

@@ -2,6 +2,7 @@ package com.minmq.broker.store;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.minmq.common.protocol.BodyCodec;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
@@ -104,22 +105,22 @@ public class BrokerStore {
     /**
      * 新增延时消息入口
      */
-    public void scheduleDelayMessage(long expireTime, String topic, String body, String tags) throws Exception {
+    public void scheduleDelayMessage(long expireTime, String topic, byte[] body, String tags) throws Exception {
         delayScheduler.schedule(expireTime, topic, body, tags);
     }
 
     /**
      * 追加消息，返回物理偏移量
      */
-    public long appendMessage(String topic, String body, String tags) throws Exception {
+    public long appendMessage(String topic, byte[] body, String tags) throws Exception {
         // 保留旧重载，内部调用新增的带二进制参数的方法
-        return appendMessage(topic, body, tags, null, null);
+        return appendMessage(topic, body, tags, BodyCodec.TEXT);
     }
 
-    public long appendMessage(String topic, String body, String tags,
-                              byte[] bodyBytes, String bodyCodec) throws Exception {
+    public long appendMessage(String topic, byte[] body, String tags,
+                              BodyCodec bodyCodec) throws Exception {
         long now = System.currentTimeMillis();
-        long offset = messageLog.append(topic, body, tags, now, bodyBytes, bodyCodec);
+        long offset = messageLog.append(topic, body, tags, now, bodyCodec);
         // 为所有已注册的消费者组追加索引
         for (Map.Entry<String, ConsumeIndexManager> entry : groupIndexes.entrySet()) {
             if (entry.getKey().startsWith(topic + "-")) {
@@ -130,7 +131,7 @@ public class BrokerStore {
     }
 
     // 原有 readMessage 删除，或改为调用 readMessageData().getBody()
-    public String readMessage(long offset) throws Exception {
+    public byte[] readMessage(long offset) throws Exception {
         return readMessageData(offset).getB();
     }
 

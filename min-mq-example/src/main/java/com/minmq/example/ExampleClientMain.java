@@ -6,10 +6,12 @@ import com.google.protobuf.InvalidProtocolBufferException;
 import com.minmq.client.Consumer;
 import com.minmq.client.MQClient;
 import com.minmq.client.Producer;
+import com.minmq.common.protocol.BodyCodec;
 import com.minmq.common.protocol.Command;
 import com.minmq.common.protocol.Message;
 import com.mymq.example.proto.OrderOuterClass.Order;
 
+import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -55,13 +57,13 @@ public class ExampleClientMain {
         // // 混合主题批量发送
         List<Message.MessagePayload> payloads = Arrays.asList(
                 // 指定了自己的 topic
-                new Message.MessagePayload("order_topic", "msg1", "paid"),
-                new Message.MessagePayload("test_topic", "msg2", "paid"),
-                new Message.MessagePayload("order_topic", "msg3", "shipped"),
+                new Message.MessagePayload("order_topic", "msg1".getBytes(), "paid"),
+                new Message.MessagePayload("test_topic", "msg2".getBytes(), "paid"),
+                new Message.MessagePayload("order_topic", "msg3".getBytes(), "shipped"),
                 // topic 为空，使用默认
-                new Message.MessagePayload("", "msg4", "paid"),
-                new Message.MessagePayload(null, "msg5", "paid"),
-                new Message.MessagePayload("order_topic", "msg6", "shipped")
+                new Message.MessagePayload("", "msg4".getBytes(), "paid"),
+                new Message.MessagePayload("paid", null, "msg5"),
+                new Message.MessagePayload("order_topic", "msg6".getBytes(), "shipped")
         );
 
         String[] tags = new String[]{"paid", "order", "paid,order"};
@@ -85,7 +87,7 @@ public class ExampleClientMain {
 //                            tagsArr[rand.nextInt(tagsArr.length)]);
                         String name = names[i % namelen];
                         Message msg = new Message(Command.SEND, topic,
-                                mapper.writeValueAsString(new Test(i++, name, name + "@email.com")));
+                                mapper.writeValueAsString(new Test(i++, name, name + "@email.com")).getBytes(), BodyCodec.JSON);
                         String tag = tags[i % 3];
                         producer.send(msg, tag);
                         System.out.println("msg with tag: " + msg + " " + tag);
@@ -93,7 +95,7 @@ public class ExampleClientMain {
                         // 发送一条 0-60 分钟后投递的延时消息
                         Message delayMsg = Message.createDelay(topic,
                                 mapper.writeValueAsString(new DelayMessage(System.currentTimeMillis(),
-                                        "This is a delayed message:" + i)),
+                                        "This is a delayed message:" + i)).getBytes(),
                                 1000L * 60 * (i % 61));
                         delayMsg.setTags(tagsArr[rand.nextInt(tagsArr.length)]);
                         producer.send(delayMsg); // 或直接 producer.sendDelay(...)
@@ -102,27 +104,27 @@ public class ExampleClientMain {
                         List<Message.MessagePayload> batchMessages = Arrays.asList(
                                 // 指定了自己的 topic
                                 new Message.MessagePayload("order_topic",
-                                        mapper.writeValueAsString(new BatchMessage(i, "a", true, null)), "paid"),
+                                        mapper.writeValueAsString(new BatchMessage(i, "a", true, null)).getBytes(), "paid"),
                                 new Message.MessagePayload("test_topic",
-                                        mapper.writeValueAsString(new BatchMessage(i, "b", true, new ArrayList<>())), "paid"),
+                                        mapper.writeValueAsString(new BatchMessage(i, "b", true, new ArrayList<>())).getBytes(), "paid"),
                                 new Message.MessagePayload("order_topic",
                                         mapper.writeValueAsString(new BatchMessage(i, "c", true, new ArrayList<>() {{
                                             add(null);
-                                        }})), "shipped"),
+                                        }})).getBytes(), "shipped"),
                                 // topic 为空，使用默认
                                 new Message.MessagePayload("",
                                         mapper.writeValueAsString(new BatchMessage(i, "c", true, new ArrayList<>() {{
                                             add(new BatchMessage(100, "a", false, null));
-                                        }})), "paid"),
+                                        }})).getBytes(), BodyCodec.JSON, "paid"),
                                 new Message.MessagePayload(null,
                                         mapper.writeValueAsString(new BatchMessage(i, "c", true, new ArrayList<>() {{
                                             add(new BatchMessage(101, "a", false, new ArrayList<>()));
-                                        }})), "paid"),
+                                        }})).getBytes(), BodyCodec.JSON, "paid"),
                                 new Message.MessagePayload("order_topic",
                                         mapper.writeValueAsString(new BatchMessage(i, "b", true, new ArrayList<>() {{
                                             add(new BatchMessage(102, "c", true, new ArrayList<>()));
                                             add(new BatchMessage(103, "a", false, new ArrayList<>()));
-                                        }})), "shipped")
+                                        }})).getBytes(), BodyCodec.JSON, "shipped")
                         );
 
                         producer.sendBatch("order_topic", payloads);
@@ -137,8 +139,8 @@ public class ExampleClientMain {
                                 .build();
 
                         Message msg2 = new Message(Command.SEND, "order_topic", null);
-                        msg2.setBodyBytes(order.toByteArray());
-                        msg2.setBodyCodec("protobuf");
+                        msg2.setBody(order.toByteArray());
+                        msg2.setBodyCodec(BodyCodec.PROTOBUF);
                         msg2.setTags("paid");
                         producer.send(msg);
                         producer.send(msg2);
@@ -162,7 +164,7 @@ public class ExampleClientMain {
                         // 消费者需要处理 pull() 返回 null 的情况（长轮询超时）
                         i++;
 
-                        System.out.println("Consumer1 received: " + msg.getBody() +
+                        System.out.println("Consumer1 received: " + new String(msg.getBody(), StandardCharsets.UTF_8) +
                                 " (offset=" + msg.getPullOffset() + ")");
                         // 确认消息处理完成
                         consumer1.ack();
@@ -184,7 +186,7 @@ public class ExampleClientMain {
                     if (msg != null && msg.getBody() != null) {
                         i++;
 
-                        System.out.println("Consumer2 received: " + msg.getBody() +
+                        System.out.println("Consumer2 received: " + new String(msg.getBody(), StandardCharsets.UTF_8) +
                                 " (offset=" + msg.getPullOffset() + ")");
                         // 确认消息处理完成
                         consumer2.ack();
@@ -206,15 +208,15 @@ public class ExampleClientMain {
                 for (int i = 0; i < 50000; ) {
                     List<Message.MessagePayload> messages = consumer3.pullBatch();
                     for (Message.MessagePayload p : messages) {
-                        if ("protobuf".equals(p.getBodyCodec())) {
+                        if (p.getBodyCodec().equals(BodyCodec.PROTOBUF)) {
                             try {
-                                Order order = Order.parseFrom(p.getBodyBytes()); // 反序列化
+                                Order order = Order.parseFrom(p.getBody()); // 反序列化
                                 System.err.println("收到订单: " + order.getOrderId() + ", " + order.getUserName());
                             } catch (InvalidProtocolBufferException e) {
                                 throw new RuntimeException(e);
                             }
-                        }else {
-                            System.out.println("Consumer3 received: " + p.getBody() +
+                        } else {
+                            System.out.println("Consumer3 received: " + Arrays.toString(p.getBody()) +
                                     " (offset=" + messages.size() + ")");
                         }
 

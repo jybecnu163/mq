@@ -2,6 +2,7 @@ package com.minmq.broker.store;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.minmq.common.protocol.BodyCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -108,20 +109,20 @@ public class MessageLog {
 
 
     // 原有两个参数的 append（兼容旧调用）
-    public synchronized long append(String topic, String body, String tags) throws Exception {
-        return append(topic, body, tags, System.currentTimeMillis(), null, null);
+    public synchronized long append(String topic, byte[] body, String tags) throws Exception {
+        return append(topic, body, tags, System.currentTimeMillis(), BodyCodec.TEXT);
     }
 
     // 带有时间戳的 append（已有）
-    public synchronized long append(String topic, String body, String tags, long timestamp) throws Exception {
-        return append(topic, body, tags, timestamp, null, null);
+    public synchronized long append(String topic, byte[] body, String tags, long timestamp) throws Exception {
+        return append(topic, body, tags, timestamp, BodyCodec.TEXT);
     }
 
     /**
      * 追加消息，返回全局物理偏移量（写入前的位置）。
      */
-    public synchronized long append(String topic, String body, String tags, long timestamp,
-                                    byte[] bodyBytes, String bodyCodec) throws Exception {
+    public synchronized long append(String topic, byte[] body, String tags, long timestamp,
+                                    BodyCodec bodyCodec) throws Exception {
         // 需要时创建或切换段
         if (activeSegment == null || activeSegment.size() >= maxSegmentSize) {
             // 首先检查当前活动段是否达到大小上限，若超过则创建新段。
@@ -129,7 +130,7 @@ public class MessageLog {
         }
 
         // 构造 MessageEntry 对象，包含主题、体、标签和时间戳。
-        MessageEntry entry = new MessageEntry(topic, body, tags, timestamp, bodyBytes, bodyCodec);
+        MessageEntry entry = new MessageEntry(topic, body, tags, timestamp, bodyCodec);
 
         byte[] data = MAPPER.writeValueAsBytes(entry);
         int length = data.length;
@@ -469,15 +470,14 @@ public class MessageLog {
         // topic
         private String p;
         // body
-        private String b;
+        public byte[] b;
         // tags
         private String t;  // 新增
         //        timestamp
         private long ts;
         // bodyBytes 新增二进制 body 持久化
-        public byte[] bb;
         //        bodyCodec
-        public String bc;
+        private BodyCodec bc = BodyCodec.TEXT;
 
         public MessageEntry() {
             // 无参构造器
@@ -487,29 +487,12 @@ public class MessageLog {
             this.ts = timestamp;
         }
 
-        public MessageEntry(String topic, String body, String tags, long timestamp) {
+        public MessageEntry(String topic, byte[] body, String tags, long timestamp, BodyCodec bodyCodec) {
             this.p = topic;
             this.b = body;
             this.t = tags;
             this.ts = timestamp;
-        }
-
-        public MessageEntry(String topic, String body, String tags, long timestamp,
-                            byte[] bodyBytes, String bodyCodec) {
-            this.p = topic;
-            this.b = body;
-            this.t = tags;
-            this.ts = timestamp;
-            this.bb = bodyBytes;
             this.bc = bodyCodec;
-        }
-
-        public long getTs() {
-            return ts;
-        }
-
-        public void setTs(long ts) {
-            this.ts = ts;
         }
 
 
@@ -521,11 +504,11 @@ public class MessageLog {
             this.p = p;
         }
 
-        public String getB() {
+        public byte[] getB() {
             return b;
         }
 
-        public void setB(String b) {
+        public void setB(byte[] b) {
             this.b = b;
         }
 
@@ -537,19 +520,19 @@ public class MessageLog {
             this.t = t;
         }
 
-        public byte[] getBb() {
-            return bb;
+        public long getTs() {
+            return ts;
         }
 
-        public void setBb(byte[] bb) {
-            this.bb = bb;
+        public void setTs(long ts) {
+            this.ts = ts;
         }
 
-        public String getBc() {
+        public BodyCodec getBc() {
             return bc;
         }
 
-        public void setBc(String bc) {
+        public void setBc(BodyCodec bc) {
             this.bc = bc;
         }
     }

@@ -52,12 +52,12 @@ public class Producer {
         while (retries < maxRetries) {
             try {
                 response = client.send(msg).get();
-                if (response.getCommand() == Command.RESPONSE && "OK".equals(response.getBody())) {
+                if (response.getCommand() == Command.RESPONSE && "OK".equals(response.getInfo())) {
                     log.debug("Producer: message sent successfully");
                     return response;
                 } else {
                     log.warn("Producer: send failed with response {}", response.getBody());
-                    throw new RuntimeException("Send failed: " + response.getBody());
+                    throw new RuntimeException("Send failed: " + Arrays.toString(response.getBody()));
                 }
             } catch (ExecutionException e) {
                 Throwable cause = e.getCause();

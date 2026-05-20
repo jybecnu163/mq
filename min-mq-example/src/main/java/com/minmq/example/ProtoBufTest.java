@@ -5,10 +5,13 @@ import com.minmq.client.Consumer;
 import com.minmq.client.MQClient;
 import com.minmq.client.Producer;
 import com.minmq.common.protocol.AckMode;
+import com.minmq.common.protocol.BodyCodec;
 import com.minmq.common.protocol.Command;
 import com.minmq.common.protocol.Message;
 import com.mymq.example.proto.OrderOuterClass;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 
@@ -33,11 +36,11 @@ public class ProtoBufTest {
             System.out.println("*****************************************************");
             for (int i = 0; i < 20; i++) {
                 Message msg = consumer.pull();
-                if (msg.getBodyBytes() != null) {
+                if (msg.getBody() != null) {
                     // Protobuf 消息
-                    if ("protobuf".equals(msg.getBodyCodec())) {
+                    if (msg.getBodyCodec().equals(BodyCodec.PROTOBUF)) {
                         try {
-                            OrderOuterClass.Order order = OrderOuterClass.Order.parseFrom(msg.getBodyBytes());
+                            OrderOuterClass.Order order = OrderOuterClass.Order.parseFrom(msg.getBody());
                             System.out.println("Protobuf 订单: " + order.getOrderId());
                         } catch (InvalidProtocolBufferException e) {
                             throw new RuntimeException(e);
@@ -45,7 +48,7 @@ public class ProtoBufTest {
                     }
                 } else if (msg.getBody() != null) {
                     // JSON 消息
-                    System.out.println("JSON 消息: " + msg.getBody());
+                    System.out.println("JSON 消息: " + new String(msg.getBody() , StandardCharsets.UTF_8));
                 } else {
                     // 可能是长轮询超时的空响应
                     System.out.println("无消息，继续等待...");
@@ -68,11 +71,11 @@ public class ProtoBufTest {
             List<Message.MessagePayload> messages = consumer.pullBatch();
             System.out.println(messages);
             for (Message.MessagePayload payload : messages) {
-                if (payload.getBodyBytes() != null) {
+                if (payload.getBody() != null) {
                     // 根据编码类型选择反序列化方式
-                    if ("protobuf".equals(payload.getBodyCodec())) {
+                    if (payload.getBodyCodec().equals(BodyCodec.PROTOBUF)) {
                         try {
-                            OrderOuterClass.Order order = OrderOuterClass.Order.parseFrom(payload.getBodyBytes());
+                            OrderOuterClass.Order order = OrderOuterClass.Order.parseFrom(payload.getBody());
                             System.out.println("订单ID: " + order.getOrderId());
                         } catch (InvalidProtocolBufferException e) {
                             throw new RuntimeException(e);
@@ -80,7 +83,7 @@ public class ProtoBufTest {
                     }
                 } else {
                     // 回退到旧版 JSON 字符串
-                    String jsonBody = payload.getBody();
+                    String jsonBody = Arrays.toString(payload.getBody());
                     System.out.println("JSON body: " + jsonBody);
                 }
                 consumer.ack();
@@ -102,8 +105,8 @@ public class ProtoBufTest {
         for (int i = 0; i < 5; i++) {
             // message中的requestId在构造函数中自动生成
             Message msg = new Message(Command.SEND, "order_topic", null);
-            msg.setBodyBytes(order1.toByteArray());   // 序列化为字节数组
-            msg.setBodyCodec("protobuf");            // 标记编码类型
+            msg.setBody(order1.toByteArray());   // 序列化为字节数组
+            msg.setBodyCodec(BodyCodec.PROTOBUF);            // 标记编码类型
             msg.setTags("paid");                     // 标签过滤仍可用
 
             System.out.println(producer.send(msg));

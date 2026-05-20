@@ -14,6 +14,7 @@ import io.netty.channel.SimpleChannelInboundHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
@@ -70,7 +71,8 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
             // 委托给 BrokerStore 的延时调度
             store.scheduleDelayMessage(expireTime, topic, body, msg.getTags());
 
-            log.info("Delay message scheduled: topic={}, body={}, expireAt={}", topic, body, expireTime);
+            log.info("Delay message scheduled: topic={}, body={}, expireAt={}", topic,
+                    new String(body, StandardCharsets.UTF_8), expireTime);
 
             Message ack = new Message(topic, "OK");
             ack.setRequestId(msg.getRequestId());
@@ -131,7 +133,8 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                 // ---- 单条发送（原有逻辑） ----
                 long offset = store.appendMessage(topic, body, tags, bodyCodec);
 
-                log.info("Message stored: topic={}, offset={}, body={}", topic, offset, body);
+                log.info("Message stored: topic={}, offset={}, body={}", topic, offset,
+                        new String(body, StandardCharsets.UTF_8));
 
                 appendIndexForAllGroups(topic, offset);
 
@@ -300,7 +303,7 @@ public class MessageHandler extends SimpleChannelInboundHandler<Message> {
                         store.getMeterRegistry().counter("mq_dead_letter_total",
                                 "originalTopic", topic, "group", group).increment();
                         log.info("Message moved to DLQ [{}]: body={}, codec={}",
-                                dlqTopic, entry.getB(), entry.getBc());
+                                dlqTopic, new String(entry.getB(), StandardCharsets.UTF_8), entry.getBc());
 
                         // 继续尝试拉取下一条消息
                         continue;

@@ -8,6 +8,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -62,7 +63,8 @@ public class BrokerStore {
                         entry.getValue().appendOffset(offset, now);
                     }
                 }
-                log.info("Delay message expired and delivered: topic={}, body={}", topic, body);
+                log.info("Delay message expired and delivered: topic={}, body={}", topic,
+                        new String(body, StandardCharsets.UTF_8));
 
             } catch (Exception e) {
                 e.printStackTrace();
